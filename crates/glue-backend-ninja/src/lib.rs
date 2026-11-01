@@ -97,7 +97,8 @@ impl<'a> NinjaBackend<'a> {
         content.push_str(&self.toolchain.generate_ninja_rules());
 
         for plan in plans {
-            fs::create_dir_all(build_dir.join("obj").join(&plan.target.name))?;
+            let sanitized_name = plan.target.name.replace("::", "_");
+            fs::create_dir_all(build_dir.join("obj").join(sanitized_name))?;
 
             let mut obj_paths = Vec::new();
 

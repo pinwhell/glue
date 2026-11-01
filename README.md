@@ -23,19 +23,25 @@ The resulting binary is located at `target/release/glue` (or `glue.exe` on Windo
 A minimal executable:
 
 ```glue
+namespace hello;
+
 exec.add(hello).sources("hello.c")
 ```
 
-A reusable library and consuming executable:
+A modular project with namespaced targets and qualified dependencies:
 
 ```glue
-static_lib.add(core)
-    .sources("src/core.c")
-    .include.public("include")
+namespace core {
+    static_lib.add(core)
+        .sources("src/core.c")
+        .include.public("include")
+}
 
-exec.add(app)
-    .sources("src/main.c")
-    .depends(core)
+namespace app {
+    exec.add(app)
+        .sources("src/main.c")
+        .depends(core::core)
+}
 ```
 
 ### 3. Build & Run

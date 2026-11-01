@@ -1,8 +1,11 @@
-static_lib.add(core)
-    .sources("src/core.c")
-    .include.public("include")
+namespace core {
+    static_lib.add(core)
+        .sources("src/core.c")
+        .include.public("include")
+}
 
-exec.add(app)
-    .sources("src/main.c")
-    .depends(core)
-
+namespace app {
+    exec.add(app)
+        .sources("src/main.c")
+        .depends(core::core)
+}

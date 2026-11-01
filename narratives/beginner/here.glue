@@ -1,5 +1,7 @@
 import openssl from "../openssl-library-developer"
 
+namespace sample;
+
 exec.add(sample)
     .sources("main.cpp")
-    .depends(openssl)
+    .depends(openssl::ssl)

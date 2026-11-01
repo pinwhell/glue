@@ -1,3 +1,5 @@
-static_lib.add(openssl)
+namespace openssl;
+
+static_lib.add(ssl)
     .sources("src/ssl.c")
     .include.public("include")

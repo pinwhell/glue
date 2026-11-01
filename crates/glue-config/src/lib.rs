@@ -31,11 +31,16 @@ pub enum TokenKind {
     Slash,
     LParen,
     RParen,
+    LBrace,
+    RBrace,
+    SemiColon,
+    ColonColon,
     Comma,
     At,
     Import,
     From,
     Version,
+    Namespace,
     Eof,
 }
 
@@ -116,6 +121,25 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     tokens.push(Token { kind: TokenKind::Slash, line: start_line, col: start_col });
                 }
+                ';' => {
+                    self.advance();
+                    tokens.push(Token { kind: TokenKind::SemiColon, line: start_line, col: start_col });
+                }
+                '{' => {
+                    self.advance();
+                    tokens.push(Token { kind: TokenKind::LBrace, line: start_line, col: start_col });
+                }
+                '}' => {
+                    self.advance();
+                    tokens.push(Token { kind: TokenKind::RBrace, line: start_line, col: start_col });
+                }
+                ':' => {
+                    self.advance();
+                    if self.peek() == Some(':') {
+                        self.advance();
+                        tokens.push(Token { kind: TokenKind::ColonColon, line: start_line, col: start_col });
+                    }
+                }
                 '(' => {
                     self.advance();
                     tokens.push(Token { kind: TokenKind::LParen, line: start_line, col: start_col });
@@ -177,6 +201,7 @@ impl<'a> Lexer<'a> {
                         "import" => TokenKind::Import,
                         "from" => TokenKind::From,
                         "version" => TokenKind::Version,
+                        "namespace" => TokenKind::Namespace,
                         _ => TokenKind::Ident(ident),
                     };
                     tokens.push(Token {
@@ -297,7 +322,10 @@ impl Parser {
             }
             TokenKind::Ident(mut s) => {
                 self.advance();
-                while matches!(self.peek().kind, TokenKind::Dot | TokenKind::Slash | TokenKind::Ident(_)) {
+                while matches!(
+                    self.peek().kind,
+                    TokenKind::Dot | TokenKind::Slash | TokenKind::ColonColon | TokenKind::Ident(_)
+                ) {
                     match &self.peek().kind {
                         TokenKind::Dot => {
                             self.advance();
@@ -306,6 +334,10 @@ impl Parser {
                         TokenKind::Slash => {
                             self.advance();
                             s.push('/');
+                        }
+                        TokenKind::ColonColon => {
+                            self.advance();
+                            s.push_str("::");
                         }
                         TokenKind::Ident(part) => {
                             let part = part.clone();
@@ -342,11 +374,42 @@ impl Parser {
 
     pub fn parse_project(&mut self, project_name: &str, root_dir: &Path) -> Result<Project, ConfigError> {
         let mut project = Project::new(project_name, root_dir.to_path_buf());
+        let mut current_namespace: Option<String> = None;
+        let mut namespace_stack: Vec<Option<String>> = Vec::new();
 
         while self.peek().kind != TokenKind::Eof {
             let tok = self.peek().clone();
 
             match tok.kind {
+                TokenKind::SemiColon => {
+                    self.advance();
+                }
+                TokenKind::Namespace => {
+                    self.advance();
+                    let ns_name = self.parse_string_or_ident()?;
+                    if self.peek().kind == TokenKind::SemiColon {
+                        self.advance();
+                        current_namespace = Some(ns_name);
+                    } else if self.peek().kind == TokenKind::LBrace {
+                        self.advance();
+                        namespace_stack.push(current_namespace.clone());
+                        current_namespace = Some(ns_name);
+                    } else {
+                        return Err(ConfigError::ParseError {
+                            line: tok.line,
+                            col: tok.col,
+                            message: "Expected ';' or '{' after namespace declaration".to_string(),
+                        });
+                    }
+                }
+                TokenKind::RBrace => {
+                    self.advance();
+                    if let Some(prev) = namespace_stack.pop() {
+                        current_namespace = prev;
+                    } else {
+                        current_namespace = None;
+                    }
+                }
                 TokenKind::Import => {
                     self.advance();
                     let _package_name = self.parse_string_or_ident()?;
@@ -389,6 +452,9 @@ impl Parser {
                     self.expect(&TokenKind::RParen)?;
 
                     let mut target = Target::new(&target_name, kind);
+                    if let Some(ref ns) = current_namespace {
+                        target = target.with_namespace(ns);
+                    }
 
                     // Parse method chain: .sources(...), .include.public(...), .depends(...), etc.
                     while self.peek().kind == TokenKind::Dot {
@@ -449,10 +515,15 @@ impl Parser {
                         }
                     }
 
-                    if project.targets.contains_key(&target.name) {
+                    if self.peek().kind == TokenKind::SemiColon {
+                        self.advance();
+                    }
+
+                    let qualified = target.qualified_name();
+                    if project.targets.contains_key(&qualified) {
                         return Err(ConfigError::SemanticError(format!(
                             "Duplicate target declared: '{}'",
-                            target.name
+                            qualified
                         )));
                     }
 

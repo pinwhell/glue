@@ -60,3 +60,53 @@ exec.add(app)
     let res = parser.parse_project("test_proj", Path::new("."));
     assert!(res.is_err(), "Expected semantic failure for missing dependency");
 }
+
+#[test]
+fn test_parse_namespaces_file_level() {
+    let input = r#"
+namespace myns;
+
+exec.add(app)
+    .sources("src/main.c")
+"#;
+    let mut lexer = Lexer::new(input);
+    let tokens = lexer.tokenize().expect("lexing failed");
+    let mut parser = Parser::new(tokens);
+    let project = parser
+        .parse_project("test_proj", Path::new("."))
+        .expect("parsing failed");
+
+    let target = project.get_target("myns::app").expect("myns::app missing");
+    assert_eq!(target.namespace.as_deref(), Some("myns"));
+    let target_short = project.get_target("app").expect("app short missing");
+    assert_eq!(target_short.name, "app");
+}
+
+#[test]
+fn test_parse_namespaces_block_level() {
+    let input = r#"
+namespace core {
+    static_lib.add(core)
+        .sources("src/core.c")
+}
+
+namespace app {
+    exec.add(app)
+        .sources("src/main.c")
+        .depends(core::core)
+}
+"#;
+    let mut lexer = Lexer::new(input);
+    let tokens = lexer.tokenize().expect("lexing failed");
+    let mut parser = Parser::new(tokens);
+    let project = parser
+        .parse_project("test_proj", Path::new("."))
+        .expect("parsing failed");
+
+    let core = project.get_target("core::core").expect("core::core missing");
+    assert_eq!(core.namespace.as_deref(), Some("core"));
+
+    let app = project.get_target("app::app").expect("app::app missing");
+    assert_eq!(app.namespace.as_deref(), Some("app"));
+    assert_eq!(app.dependencies, vec!["core::core"]);
+}

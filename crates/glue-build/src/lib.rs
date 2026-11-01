@@ -132,7 +132,8 @@ impl<'a> BuildPlanner<'a> {
         }
         all_includes.extend(propagated_includes);
 
-        let target_obj_dir = self.build_dir.join("obj").join(&target.name);
+        let sanitized_name = target.name.replace("::", "_");
+        let target_obj_dir = self.build_dir.join("obj").join(sanitized_name);
         let mut compile_units = Vec::new();
 
         for src in &target.sources {
