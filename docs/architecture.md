@@ -347,6 +347,46 @@ The parser should produce an abstract syntax tree. Semantic validation should th
 
 The build engine should never depend directly on formatting or syntax choices.
 
+## 5.8. Namespaces and target qualification
+
+Glue supports namespaces to prevent target name collisions across modular projects, subprojects, and imported third-party packages.
+
+### Namespace declarations
+
+Projects can declare a namespace to scope their exposed targets:
+
+```glue
+namespace openssl;
+
+static_lib.add(crypto)
+    .sources("src/crypto.c")
+    .include.public("include")
+```
+
+Alternatively, scoped blocks may group targets under explicit namespaces:
+
+```glue
+namespace openssl {
+    static_lib.add(ssl)
+        .sources("src/ssl.c")
+        .include.public("include")
+}
+```
+
+### Qualified target references
+
+Consumers refer to namespaced targets using double-colon qualification syntax:
+
+```glue
+import openssl from "../openssl"
+
+exec.add(client)
+    .sources("src/client.c")
+    .depends(openssl::ssl)
+```
+
+If a package exports a primary target matching its package name, or if aliasing is configured, Glue resolves both qualified (`openssl::ssl`) and package-level references (`openssl`) according to project-level visibility rules.
+
 # 6. Package Management
 
 Glue's package manager should make local and remote dependencies available through a consistent interface.
@@ -423,6 +463,16 @@ These names are illustrative.
 Glue should allow a consumer to define a local alias without changing the canonical package identity.
 
 Namespaces prevent ambiguity in the build model, but they do not automatically eliminate symbol collisions in compiled C or C++ binaries.
+
+### Resolution and Scoping Rules
+
+1. **Canonical Qualification:** Every target in the project graph has a canonical name `<namespace>::<target>`. Targets declared without an explicit namespace default to the project's root namespace.
+2. **Local Aliases:** Consumers may bind local aliases during import to avoid deep hierarchies or resolve local naming preferences:
+   ```glue
+   import json from github@alice/json as local_json
+   ```
+3. **Collision Isolation:** Two packages exporting identically named internal targets (such as `core` or `utils`) coexist cleanly in the build graph because their graph identities are partitioned by their package namespaces.
+4. **Symbol Visibility vs Target Scoping:** Target namespaces ensure unambiguous DAG operations and linker inputs, but native C/C++ global symbols still require appropriate compiler visibility attributes or namespace encapsulation to prevent runtime symbol collisions.
 
 ## 6.5. Package manifests
 
