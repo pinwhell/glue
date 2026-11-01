@@ -1,0 +1,10 @@
+[package]
+name = "glue-build"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+glue-model = { path = "../glue-model" }
+glue-toolchains = { path = "../glue-toolchains" }
+sha2 = "0.10"
+thiserror = "2.0"

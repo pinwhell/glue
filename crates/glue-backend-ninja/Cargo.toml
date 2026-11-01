@@ -1,0 +1,10 @@
+[package]
+name = "glue-backend-ninja"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+glue-model = { path = "../glue-model" }
+glue-toolchains = { path = "../glue-toolchains" }
+glue-build = { path = "../glue-build" }
+thiserror = "2.0"

@@ -1,0 +1,1 @@
+exec.add(hello).sources("hello.c")

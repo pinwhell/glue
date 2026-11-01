@@ -1,0 +1,21 @@
+[package]
+name = "glue-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "glue"
+path = "src/main.rs"
+
+[dependencies]
+glue-model = { path = "../glue-model" }
+glue-config = { path = "../glue-config" }
+glue-toolchains = { path = "../glue-toolchains" }
+glue-build = { path = "../glue-build" }
+glue-backend-ninja = { path = "../glue-backend-ninja" }
+glue-packages = { path = "../glue-packages" }
+glue-resolver = { path = "../glue-resolver" }
+glue-platform-android = { path = "../glue-platform-android" }
+clap = { version = "4.5", features = ["derive"] }
+colored = "2.1"
+anyhow = "1.0"

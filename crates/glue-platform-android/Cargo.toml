@@ -1,0 +1,9 @@
+[package]
+name = "glue-platform-android"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+glue-model = { path = "../glue-model" }
+glue-toolchains = { path = "../glue-toolchains" }
+thiserror = "2.0"

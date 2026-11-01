@@ -1,0 +1,10 @@
+[package]
+name = "glue-packages"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+glue-model = { path = "../glue-model" }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+thiserror = "2.0"

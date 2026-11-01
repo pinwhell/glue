@@ -1,0 +1,4 @@
+[toolchain]
+channel = "stable"
+components = ["rustc", "cargo", "rust-std"]
+targets = ["x86_64-pc-windows-msvc"]

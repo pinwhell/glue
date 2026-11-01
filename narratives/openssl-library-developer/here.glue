@@ -1,0 +1,3 @@
+static_lib.add(openssl)
+    .sources("src/ssl.c")
+    .include.public("include")

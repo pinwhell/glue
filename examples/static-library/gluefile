@@ -1,0 +1,8 @@
+static_lib.add(core)
+    .sources("src/core.c")
+    .include.public("include")
+
+exec.add(app)
+    .sources("src/main.c")
+    .depends(core)
+

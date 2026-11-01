@@ -1,0 +1,13 @@
+[workspace]
+members = [
+    "crates/glue-model",
+    "crates/glue-config",
+    "crates/glue-toolchains",
+    "crates/glue-build",
+    "crates/glue-backend-ninja",
+    "crates/glue-packages",
+    "crates/glue-resolver",
+    "crates/glue-platform-android",
+    "crates/glue-cli",
+]
+resolver = "2"

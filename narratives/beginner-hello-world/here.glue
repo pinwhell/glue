@@ -1,0 +1,1 @@
+exec.add(main).sources("main.cpp")

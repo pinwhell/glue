@@ -1,0 +1,17 @@
+# Build artifacts
+/target/
+**/.glue/
+**/.ninja_deps
+**/.ninja_log
+*.obj
+*.o
+*.lib
+*.a
+*.pdb
+*.exe
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.patch
