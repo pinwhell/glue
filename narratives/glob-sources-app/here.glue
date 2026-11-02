@@ -4,6 +4,10 @@ static_lib.add(core)
     .sources("src/*.c")
     .include.public("include")
 
+static_lib.add(solver)
+    .sources("regex:algo/solver_v[0-9]+\\.c")
+    .include.public("include")
+
 exec.add(app)
     .sources("app/*.c")
-    .depends(math::core)
+    .depends(math::core, math::solver)

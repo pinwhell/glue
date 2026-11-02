@@ -138,14 +138,26 @@ impl<'a> BuildPlanner<'a> {
 
         let mut expanded_sources = Vec::new();
         for src in &target.sources {
-            let files = expand_glob_pattern(&self.project.root_dir, src);
-            if files.is_empty() && (src.to_string_lossy().contains('*') || src.to_string_lossy().contains('?')) {
-                return Err(BuildError::CompilationFailed {
-                    target: target.name.clone(),
-                    message: format!("Glob pattern '{}' did not match any source files", src.display()),
-                });
+            let src_str = src.to_string_lossy();
+            if let Some(regex_pattern) = src_str.strip_prefix("regex:") {
+                let files = expand_regex_pattern(&self.project.root_dir, regex_pattern);
+                if files.is_empty() {
+                    return Err(BuildError::CompilationFailed {
+                        target: target.name.clone(),
+                        message: format!("Regex pattern '{}' did not match any source files", regex_pattern),
+                    });
+                }
+                expanded_sources.extend(files);
+            } else {
+                let files = expand_glob_pattern(&self.project.root_dir, src);
+                if files.is_empty() && (src_str.contains('*') || src_str.contains('?')) {
+                    return Err(BuildError::CompilationFailed {
+                        target: target.name.clone(),
+                        message: format!("Glob pattern '{}' did not match any source files", src.display()),
+                    });
+                }
+                expanded_sources.extend(files);
             }
-            expanded_sources.extend(files);
         }
 
         for full_src in expanded_sources {
@@ -249,4 +261,163 @@ fn matches_simple_pattern(name: &str, pattern: &str) -> bool {
         return name.starts_with(prefix) && name.ends_with(suffix);
     }
     name == pattern
+}
+
+fn expand_regex_pattern(root: &Path, pattern: &str) -> Vec<PathBuf> {
+    let (dir_part, file_regex_str) = match pattern.rfind('/') {
+        Some(idx) => (&pattern[..idx], &pattern[idx + 1..]),
+        None => ("", pattern),
+    };
+
+    let search_dir = if dir_part.is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(dir_part)
+    };
+
+    let ops = parse_regex(file_regex_str);
+    let mut matches = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&search_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                let chars: Vec<char> = name.chars().collect();
+                if match_ops(&ops, &chars) {
+                    matches.push(path);
+                }
+            }
+        }
+    }
+    matches.sort();
+    matches
+}
+
+#[derive(Debug, Clone)]
+enum RegexToken {
+    Any,
+    Char(char),
+    Class(Vec<(char, char)>),
+}
+
+#[derive(Debug, Clone)]
+enum RegexOp {
+    Exact(RegexToken),
+    ZeroOrMore(RegexToken),
+    OneOrMore(RegexToken),
+    ZeroOrOne(RegexToken),
+}
+
+fn parse_regex(pat: &str) -> Vec<RegexOp> {
+    let mut s = pat;
+    if s.starts_with('^') {
+        s = &s[1..];
+    }
+    if s.ends_with('$') {
+        s = &s[..s.len() - 1];
+    }
+
+    let mut ops = Vec::new();
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let tok = match chars[i] {
+            '\\' => {
+                i += 1;
+                if i < chars.len() {
+                    RegexToken::Char(chars[i])
+                } else {
+                    RegexToken::Char('\\')
+                }
+            }
+            '.' => RegexToken::Any,
+            '[' => {
+                i += 1;
+                let mut ranges = Vec::new();
+                while i < chars.len() && chars[i] != ']' {
+                    if i + 2 < chars.len() && chars[i + 1] == '-' && chars[i + 2] != ']' {
+                        ranges.push((chars[i], chars[i + 2]));
+                        i += 3;
+                    } else {
+                        ranges.push((chars[i], chars[i]));
+                        i += 1;
+                    }
+                }
+                RegexToken::Class(ranges)
+            }
+            c => RegexToken::Char(c),
+        };
+        i += 1;
+
+        if i < chars.len() {
+            match chars[i] {
+                '*' => {
+                    ops.push(RegexOp::ZeroOrMore(tok));
+                    i += 1;
+                }
+                '+' => {
+                    ops.push(RegexOp::OneOrMore(tok));
+                    i += 1;
+                }
+                '?' => {
+                    ops.push(RegexOp::ZeroOrOne(tok));
+                    i += 1;
+                }
+                _ => ops.push(RegexOp::Exact(tok)),
+            }
+        } else {
+            ops.push(RegexOp::Exact(tok));
+        }
+    }
+
+    ops
+}
+
+fn tok_matches(tok: &RegexToken, c: char) -> bool {
+    match tok {
+        RegexToken::Any => true,
+        RegexToken::Char(expected) => *expected == c,
+        RegexToken::Class(ranges) => ranges.iter().any(|(start, end)| c >= *start && c <= *end),
+    }
+}
+
+fn match_ops(ops: &[RegexOp], chars: &[char]) -> bool {
+    if ops.is_empty() {
+        return chars.is_empty();
+    }
+
+    match &ops[0] {
+        RegexOp::Exact(tok) => {
+            if !chars.is_empty() && tok_matches(tok, chars[0]) {
+                match_ops(&ops[1..], &chars[1..])
+            } else {
+                false
+            }
+        }
+        RegexOp::ZeroOrOne(tok) => {
+            if !chars.is_empty() && tok_matches(tok, chars[0]) && match_ops(&ops[1..], &chars[1..]) {
+                return true;
+            }
+            match_ops(&ops[1..], chars)
+        }
+        RegexOp::ZeroOrMore(tok) => {
+            if match_ops(&ops[1..], chars) {
+                return true;
+            }
+            if !chars.is_empty() && tok_matches(tok, chars[0]) {
+                return match_ops(ops, &chars[1..]);
+            }
+            false
+        }
+        RegexOp::OneOrMore(tok) => {
+            if chars.is_empty() || !tok_matches(tok, chars[0]) {
+                return false;
+            }
+            let mut remaining_ops = vec![RegexOp::ZeroOrMore(tok.clone())];
+            remaining_ops.extend_from_slice(&ops[1..]);
+            match_ops(&remaining_ops, &chars[1..])
+        }
+    }
 }

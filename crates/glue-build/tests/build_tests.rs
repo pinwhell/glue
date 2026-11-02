@@ -53,3 +53,33 @@ fn test_expand_glob_pattern_sources() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_expand_regex_pattern_sources() {
+    let temp_dir = std::env::temp_dir().join(format!("glue_test_regex_{}", std::process::id()));
+    let src_dir = temp_dir.join("src");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    std::fs::write(src_dir.join("core_v1.c"), "int v1 = 1;").unwrap();
+    std::fs::write(src_dir.join("core_v2.c"), "int v2 = 2;").unwrap();
+    std::fs::write(src_dir.join("core_legacy.c"), "int legacy = 0;").unwrap();
+
+    let mut proj = Project::new("test_regex", temp_dir.clone());
+    let mut target = Target::new("app", TargetKind::Exec);
+    target.sources.push(PathBuf::from("regex:src/core_v[0-9]+\\.c"));
+    proj.add_target(target);
+
+    let toolchain = ToolchainManager::detect_best_toolchain().expect("toolchain required");
+    let planner = BuildPlanner::new(&proj, toolchain.as_ref());
+    let plan = planner.plan_target("app").expect("planning failed");
+
+    // Only core_v1.c and core_v2.c should match, ignoring core_legacy.c
+    assert_eq!(plan.compile_units.len(), 2);
+    let src_names: Vec<String> = plan
+        .compile_units
+        .iter()
+        .map(|u| u.source.file_name().unwrap().to_str().unwrap().to_string())
+        .collect();
+    assert_eq!(src_names, vec!["core_v1.c", "core_v2.c"]);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

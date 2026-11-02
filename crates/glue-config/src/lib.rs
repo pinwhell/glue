@@ -463,9 +463,26 @@ impl Parser {
 
                         match prop.as_str() {
                             "sources" => {
-                                let srcs = self.parse_arguments()?;
-                                for s in srcs {
-                                    target.sources.push(PathBuf::from(s));
+                                if self.peek().kind == TokenKind::Dot {
+                                    self.advance();
+                                    let sub = self.expect_ident()?;
+                                    if sub == "regex" {
+                                        let patterns = self.parse_arguments()?;
+                                        for p in patterns {
+                                            target.sources.push(PathBuf::from(format!("regex:{}", p)));
+                                        }
+                                    } else {
+                                        return Err(ConfigError::ParseError {
+                                            line: tok.line,
+                                            col: tok.col,
+                                            message: format!("Unknown sources modifier: '.{}'", sub),
+                                        });
+                                    }
+                                } else {
+                                    let srcs = self.parse_arguments()?;
+                                    for s in srcs {
+                                        target.sources.push(PathBuf::from(s));
+                                    }
                                 }
                             }
                             "depends" => {

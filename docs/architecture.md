@@ -295,7 +295,28 @@ exec.add(app)
 - Glob expansion results are deterministically sorted alphabetically by path to guarantee reproducible build plans across machines and operating systems.
 - Unmatched glob patterns produce an early diagnostic before scheduling build actions, preventing silent compilation omissions.
 
-Automatic source discovery may be offered as an optional convenience, but explicit source declarations and explicit globs remain the predictable default.
+### Regular expression patterns
+
+In succession with glob patterns, Glue supports regular expression matching for fine-grained source discovery (such as versioned source files, complex naming conventions, or filtered subsets):
+
+```glue
+static_lib.add(core)
+    .sources("regex:src/core_v[0-9]+\\.c")
+
+exec.add(app)
+    .sources(
+        "regex:src/v[0-9]+_.*\\.cpp",
+        "generated/parser.cpp"
+    )
+```
+
+**Resolution semantics for regex patterns:**
+- Regex source specifications begin with the `regex:` prefix (or `.sources.regex(...)`) and evaluate an expression against candidate files within the specified search directory.
+- Candidate files are discovered in the base path and filtered against the regular expression.
+- Matched file lists are deterministically sorted alphabetically by path to maintain reproducible build graphs across platforms.
+- If a regex pattern matches zero files, Glue raises an early configuration diagnostic to prevent unexpected empty targets.
+
+Automatic source discovery may be offered as an optional convenience, but explicit source declarations, globs and regex patterns remain the predictable default.
 
 This avoids unexpectedly adding files to a build simply because they appeared in a directory.
 
