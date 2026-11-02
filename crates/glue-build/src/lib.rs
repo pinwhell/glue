@@ -136,13 +136,19 @@ impl<'a> BuildPlanner<'a> {
         let target_obj_dir = self.build_dir.join("obj").join(sanitized_name);
         let mut compile_units = Vec::new();
 
+        let mut expanded_sources = Vec::new();
         for src in &target.sources {
-            let full_src = if src.is_absolute() {
-                src.clone()
-            } else {
-                self.project.root_dir.join(src)
-            };
+            let files = expand_glob_pattern(&self.project.root_dir, src);
+            if files.is_empty() && (src.to_string_lossy().contains('*') || src.to_string_lossy().contains('?')) {
+                return Err(BuildError::CompilationFailed {
+                    target: target.name.clone(),
+                    message: format!("Glob pattern '{}' did not match any source files", src.display()),
+                });
+            }
+            expanded_sources.extend(files);
+        }
 
+        for full_src in expanded_sources {
             let stem = full_src.file_name().unwrap().to_str().unwrap();
             let obj_name = if cfg!(windows) && self.toolchain.toolchain_type() == glue_toolchains::ToolchainType::Msvc {
                 format!("{}.obj", stem)
@@ -192,4 +198,55 @@ impl<'a> BuildPlanner<'a> {
         hasher.update(&content);
         Ok(format!("{:x}", hasher.finalize()))
     }
+}
+
+fn expand_glob_pattern(root: &Path, pattern: &Path) -> Vec<PathBuf> {
+    let pattern_str = pattern.to_string_lossy();
+    if !pattern_str.contains('*') && !pattern_str.contains('?') {
+        let full = if pattern.is_absolute() {
+            pattern.to_path_buf()
+        } else {
+            root.join(pattern)
+        };
+        return vec![full];
+    }
+
+    let parent = pattern.parent().unwrap_or(Path::new(""));
+    let search_dir = if parent.as_os_str().is_empty() {
+        root.to_path_buf()
+    } else if parent.is_absolute() {
+        parent.to_path_buf()
+    } else {
+        root.join(parent)
+    };
+
+    let file_pattern = pattern.file_name().unwrap_or_default().to_string_lossy();
+    let mut matches = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&search_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                if matches_simple_pattern(&name, &file_pattern) {
+                    matches.push(path);
+                }
+            }
+        }
+    }
+    matches.sort();
+    matches
+}
+
+fn matches_simple_pattern(name: &str, pattern: &str) -> bool {
+    if pattern == "*" || pattern == "*.*" {
+        return true;
+    }
+    if let Some(ext) = pattern.strip_prefix("*.") {
+        return name.ends_with(&format!(".{}", ext));
+    }
+    if let Some((prefix, suffix)) = pattern.split_once('*') {
+        return name.starts_with(prefix) && name.ends_with(suffix);
+    }
+    name == pattern
 }

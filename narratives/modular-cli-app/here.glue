@@ -1,0 +1,9 @@
+namespace cli {
+    static_lib.add(engine)
+        .sources("src/engine.c")
+        .include.public("include")
+
+    exec.add(calc)
+        .sources("src/main.c")
+        .depends(cli::engine)
+}

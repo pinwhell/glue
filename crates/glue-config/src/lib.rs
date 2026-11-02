@@ -486,11 +486,15 @@ impl Parser {
                                     }
                                 }
                             }
-                            "define" => {
+                            "define" | "defines" => {
                                 let defs = self.parse_arguments()?;
                                 if let Some(key) = defs.first() {
-                                    let val = defs.get(1).cloned();
-                                    target.defines.push((key.clone(), val));
+                                    if let Some((k, v)) = key.split_once('=') {
+                                        target.defines.push((k.to_string(), Some(v.to_string())));
+                                    } else {
+                                        let val = defs.get(1).cloned();
+                                        target.defines.push((key.clone(), val));
+                                    }
                                 }
                             }
                             "flags" => {

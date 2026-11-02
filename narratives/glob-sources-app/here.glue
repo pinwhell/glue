@@ -1,0 +1,9 @@
+namespace math;
+
+static_lib.add(core)
+    .sources("src/*.c")
+    .include.public("include")
+
+exec.add(app)
+    .sources("app/*.c")
+    .depends(math::core)

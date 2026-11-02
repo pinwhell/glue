@@ -275,7 +275,27 @@ exec.add(app)
 
 Glue should also support generated sources.
 
-Automatic source discovery may be offered as an optional convenience, but explicit source declarations should remain the predictable default.
+### Glob patterns
+
+The declarative language supports file globbing patterns (e.g., `"src/*.c"`) to match groups of source files ergonomically:
+
+```glue
+static_lib.add(core)
+    .sources("src/*.c")
+
+exec.add(app)
+    .sources(
+        "src/*.cpp",
+        "generated/parser.cpp"
+    )
+```
+
+**Resolution semantics for glob patterns:**
+- Patterns such as `"src/*.c"`, `"engine/*.cpp"`, and `"tests/test_*.c"` are evaluated relative to the project root directory during project configuration.
+- Glob expansion results are deterministically sorted alphabetically by path to guarantee reproducible build plans across machines and operating systems.
+- Unmatched glob patterns produce an early diagnostic before scheduling build actions, preventing silent compilation omissions.
+
+Automatic source discovery may be offered as an optional convenience, but explicit source declarations and explicit globs remain the predictable default.
 
 This avoids unexpectedly adding files to a build simply because they appeared in a directory.
 

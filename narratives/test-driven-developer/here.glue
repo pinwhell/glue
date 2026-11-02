@@ -1,0 +1,9 @@
+namespace math;
+
+static_lib.add(calculator)
+    .sources("src/calculator.c")
+    .include.public("include")
+
+exec.add(unit_tests)
+    .sources("tests/test_runner.c")
+    .depends(math::calculator)

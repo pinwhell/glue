@@ -1,0 +1,9 @@
+namespace engine;
+
+static_lib.add(render)
+    .sources("engine/renderer.c")
+    .include.public("engine")
+
+exec.add(game)
+    .sources("game/main.c")
+    .depends(engine::render)
