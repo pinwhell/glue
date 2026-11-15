@@ -2,217 +2,119 @@
 
 # Glue
 
-**A Unified Native Development System for C and C++**
+### The build system and package manager C and C++ always deserved.
 
-*Declarative Build Graphs &bull; Binary-First Packages &bull; Automatic Runtime Deployment &bull; Reproducible Native Toolchains*
+*Inspired by the ergonomics of **Rust's Cargo**. Powered by the raw speed of **Ninja**.*
 
-[![CI Build](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform: Cross-Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Android-lightgrey.svg)]()
-[![Backend: Ninja](https://img.shields.io/badge/backend-Ninja%201.12-orange.svg)](https://ninja-build.org/)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
+[![Toolchains](https://img.shields.io/badge/toolchains-MSVC%20%7C%20Clang%20%7C%20GCC-purple.svg)]()
 
 </div>
 
 ---
 
-Glue is an integrated native development platform for modern C and C++. It unifies **declarative target definition**, **native toolchain orchestration**, **deterministic graph planning**, and a **binary-first package ecosystem** behind a single cohesive command-line interface.
+## What is Glue?
 
-Instead of orchestrating fragile CMake scripts, manual `vcvarsall.bat` wrappers, brittle system package paths, and ad-hoc copy rules, Glue computes the exact target dependency DAG, resolves ABI-compatible binary packages, and delegates execution directly to high-performance build backends like [Ninja](https://ninja-build.org/).
+If you have ever used **Rust's Cargo**, **Go**, or **npm**, you know how good modern tooling feels: you create a project, declare your dependencies, hit `run`, and everything just works.
 
----
+In C and C++, we have spent decades wrestling with:
+- Arcane 30-year-old **CMake** scripts and macro syntax.
+- **"Missing DLL" errors** (`fastmath.dll was not found`) every time you try to run an application.
+- Hunting down compiler environment scripts (`vcvarsall.bat`, custom sysroots).
+- Copy-pasting `.c` and `.h` files into `vendor/` directories because there is no simple way to import a library.
+- Dependency builds compiling 200 unit tests and benchmarks you never asked for.
 
-## Key Architectural Innovations
-
-```mermaid
-flowchart TD
-    Config["gluefile / here.glue\nDeclarative DSL"] --> Parser["Glue Lexer & Parser\n(AST, Namespaces, Imports)"]
-    Parser --> Dispatch{"Evaluation Context"}
-    
-    Dispatch -->|CTX_PROJECT| Graph["Build Planner DAG\n(Transitive Includes & Defines)"]
-    Dispatch -->|when imported| PackageRoute["Binary Variant Cache\n(product/packages/)"]
-    
-    Graph --> Toolchain["Toolchain Discovery\n(MSVC, Clang, GCC)"]
-    PackageRoute --> Toolchain
-    Toolchain --> NinjaGen["Ninja Backend DAG CodeGen"]
-    NinjaGen --> NinjaExec["Ninja Execution Engine"]
-    NinjaExec --> Output["product/build/<arch-os>/bin/"]
-    
-    PackageRoute -.->|Shared Lib Payload| DeployClosure["Automatic Runtime Deployment Closure"]
-    DeployClosure -.->|Stage .dll / .so| Output
-```
-
-### 1. Binary-First, Source-Capable Packages
-Glue bridges the historic divide between source-only distributions (CMake/CPM) and precompiled systems (vcpkg/Conan). It inspects target ABI constraints, fetches precompiled binary variants matching the active host toolchain, verifies detached cryptographic digests, and falls back to deterministic source compilation only when an ABI variant is absent.
-
-### 2. Declarative Context Separation (`when imported`)
-Subproject pollution and leaky internal tests are eliminated at the grammar level:
-```glue
-when imported {
-    return package()
-}
-
-// Active during local developer builds, bypassed when consumed as an import
-static_lib.add(core).sources("src/*.c").include.public("include")
-exec.add(test_suite).sources("tests/*.c").depends(core)
-```
-
-### 3. Automatic Runtime Deployment Closure
-Glue eliminates **"DLL Hell"** and loader path crashes on native operating systems. When an executable consumes a shared library (`shared_lib`), Glue's runtime deployment closure automatically stages all transitive `.dll` or `.so` binaries directly into `product/build/<build-key>/bin/` alongside the linked executable, guaranteeing immediate zero-configuration execution via `glue run`.
-
-### 4. Tripartite Identity Model
-Glue mathematically partitions dependency identity across three independent dimensions:
-1. **Package Coordinate:** Semantic upstream coordinate (`github@pinwhell/inih@0.5.0`).
-2. **Variant ID:** Deterministic hash of target OS, CPU architecture, toolchain fingerprint, and compilation options.
-3. **Content Digest:** Cryptographic SHA-256 tree digest computed over the relocatable payload.
-
-### 5. Reproducible Locked Builds (`glue.lock`)
-All resolved dependencies, git commits, variant identifiers, and content digests are serialized to `glue.lock`. In CI/CD pipelines, `glue build --locked` strictly guarantees deterministic zero-drift reproducibility.
+**Glue solves this.** It gives C and C++ developers a modern, intuitive, declarative workflow with zero configuration, automatic dependency resolution, and instant execution.
 
 ---
 
-## Directory Topology
+## Why Glue? (Solving C/C++'s Biggest Pain Points)
 
-Glue establishes an explicit separation between user sources, transient build intermediates, distributable package variants, and engine cache:
-
-```text
-my-project/
-├── here.glue                         # Project entry manifest
-├── glue.lock                         # Deterministic dependency lockfile
-├── src/
-│   └── main.c
-├── include/
-│   └── my_project.h
-│
-├── product/                          # Canonical project artifacts
-│   ├── build/                        # Ephemeral build tree (safe to clean)
-│   │   └── x86_64-windows/
-│   │       ├── obj/                  # Intermediate .obj / .o files
-│   │       └── bin/                  # Linked executables & staged DLLs
-│   │
-│   └── packages/                     # Relocatable, exported package products
-│       └── acme/
-│           └── fastmath/
-│               └── 2.0.0/
-│                   ├── gluefile      # Top-level package entry
-│                   ├── metadata.json # Variant registry & digests
-│                   └── variants/
-│                       └── <variant-id>/
-│                           ├── package.toml   # Variant ABI descriptors
-│                           ├── content.sha256 # Detached cryptographic digest
-│                           ├── gluefile       # Variant prebuilt bindings
-│                           ├── include/       # Public relocatable headers
-│                           ├── lib/           # Link-time interface (.lib / .so)
-│                           └── bin/           # Runtime deployment payload (.dll)
-│
-└── .glue/                            # Ephemeral engine scratch cache
-    └── cache/sources/github.com/     # Bare git checkouts & clone caches
-```
+| The Pain in Traditional C/C++ | How Glue Solves It |
+|---|---|
+| **CMake Boilerplate Hell:** Writing 30 lines of `cmake_minimum_required`, `add_executable`, `target_include_directories`, and `set_target_properties` just to compile two files. | **3 Lines of Declarative Code:**<br>`exec.add(app).sources("src/*.c").include.public("include")`<br>Clean, readable, and intuitive. |
+| **"Missing DLL" Loader Crashes:** You compile an executable with a shared library, run it, and the OS crashes because the `.dll` or `.so` is not in your path. | **Automatic Runtime Deployment:** Glue discovers all shared libraries in your dependency tree and stages the `.dll`/`.so` directly alongside your executable. `glue run` just works. |
+| **No Simple Package Imports:** Having to manually clone repositories, configure git submodules, or struggle with complex package managers. | **Direct Git & GitHub Imports:**<br>`import inih from github@pinwhell/inih`<br>Glue clones, caches, links, and manages it for you. |
+| **Subproject Pollution:** Including a library via `add_subdirectory()` drags in the author's internal tests, examples, and linters into your build. | **Declarative Context Separation (`when imported`):** Libraries cleanly separate their internal developer tests from what they export to consumers. |
+| **Manual Compiler Setup:** Forgetting to run Visual Studio's `vcvarsall.bat` before compiling on Windows. | **Automatic Toolchain Discovery:** Glue auto-detects installed compilers (MSVC Community, Clang, GCC) and sets up their environments automatically. |
+| **Non-Reproducible Builds:** Builds breaking because a teammate has a different library version installed globally. | **Deterministic Lockfile (`glue.lock`):** Pinned versions, variant hashes, and SHA-256 digests ensure 100% reproducible builds across machines. |
 
 ---
 
-## Quick Start
+## Quick Start (60 Seconds)
 
-### Installation
+### 1. Installation
 
-Ensure Rust (1.75+) and [Ninja](https://ninja-build.org/) (1.11+) are installed.
+Build the single self-contained `glue` binary with Rust:
 
 ```bash
 git clone https://github.com/pinwhell/glue.git
 cd glue
-cargo build --release
-```
-
-Add `target/release` to your `PATH`, or install directly:
-```bash
 cargo install --path crates/glue-cli
 ```
 
-### 1. Initialize a Project
+*(Ensure [Ninja](https://ninja-build.org/) 1.11+ is installed and on your PATH).*
+
+### 2. Create Your First Project
 
 ```bash
-mkdir hello-glue && cd hello-glue
+mkdir my-app && cd my-app
 glue init my_app
 ```
 
-This creates a minimal `here.glue` and `main.cpp`:
-```glue
-exec.add(my_app).sources("main.cpp")
-```
+This generates a ready-to-run project:
+- `here.glue`: Your project configuration.
+- `main.cpp`: A starter C++ application.
 
-### 2. Build and Run
+### 3. Run It
 
 ```bash
-# Build the default target using the auto-discovered host toolchain (MSVC/Clang/GCC)
-glue build
-
-# Compile (if needed) and execute immediately
 glue run
 ```
 
----
-
-## Declarative Language Guide
-
-### Target Definitions
-Glue supports full first-class modeling of native software targets:
-
-| Target Declaration | Semantics & Outputs |
-|---|---|
-| `exec.add(name)` | Linked executable binary (`.exe`, ELF binary, Mach-O). |
-| `static_lib.add(name)` | Static library archive (`.lib`, `.a`). |
-| `shared_lib.add(name)` | Shared library (`.dll`, `.so`, `.dylib`) and link-time import library. |
-| `object_lib.add(name)` | Unlinked relocatable object collection. |
-| `interface_lib.add(name)`| Header-only / Interface library exporting includes and preprocessor definitions. |
-
-### Source File Discovery
-Sources are resolved deterministically:
-```glue
-// 1. Explicit file declarations
-exec.add(app).sources("src/main.c", "src/util.c")
-
-// 2. Lexicographically sorted globbing
-static_lib.add(core).sources("src/*.c", "src/platform/*.c")
-
-// 3. Regular expression patterns (prefixed with regex:)
-static_lib.add(math).sources("regex:src/core_v[0-9]+\\.c")
+```text
+glue: Successfully built artifact: product/build/x86_64-windows/bin/my_app.exe
+Hello from Glue!
 ```
 
-### Public & Private Property Propagation
-Dependencies inherit compilation properties transitively:
-```glue
-namespace engine;
-
-static_lib.add(renderer)
-    .sources("src/render/*.cpp")
-    .include.public("include")             // Exported to downstream consumers
-    .include.private("src/internal")       // Private to this target
-    .define("RENDERER_ENABLED")            // Public macro definition
-
-exec.add(game)
-    .sources("src/main.cpp")
-    .depends(engine::renderer)             // Automatically inherits public include dirs & defines
-```
-
-### Remote GitHub Package Imports
-Import third-party native libraries directly from GitHub:
-```glue
-import inih from github@pinwhell/inih version "^0.5.0"
-
-namespace app;
-
-exec.add(calc)
-    .sources("src/main.c")
-    .depends(inih::inih)
-```
-Glue clones the repository into `.glue/cache/sources/github.com/pinwhell/inih`, detects precompiled ABI variants, or triggers a source build automatically.
+No build directories to create, no generator flags to pass, no environment variables to configure.
 
 ---
 
-## Packaging Shared Libraries (`shared_lib`)
+## How Simple is the Configuration?
 
-A core strength of Glue is its formal separation between the **Link-Time Interface** (`lib/`) and the **Runtime Deployment Payload** (`bin/` or `runtime/`).
+### A Simple Executable
+`here.glue`:
+```glue
+namespace my_project;
 
-### Producer (`fastmath/here.glue`):
+exec.add(hello).sources("hello.c")
+```
+
+### A Library and a Consumer Application
+`here.glue`:
+```glue
+namespace math {
+    static_lib.add(core)
+        .sources("src/math/*.c")
+        .include.public("include")
+}
+
+namespace app {
+    exec.add(calculator)
+        .sources("src/main.c")
+        .depends(math::core)
+}
+```
+> [!TIP]
+> Notice how `app` depends on `math::core`. Glue automatically forwards the public include directories and preprocessor definitions to `app` without any manual flag forwarding.
+
+### Using Shared Libraries (DLLs / .so) with Zero Loader Errors
+Building shared libraries on Windows and Linux is notoriously painful because of import libraries and runtime loader paths. In Glue, it's effortless:
+
+**The Library (`fastmath`):**
 ```glue
 when imported {
     return package()
@@ -226,32 +128,16 @@ shared_lib.add(fastmath)
     .define("FASTMATH_EXPORTS")
 ```
 
-Produce the versioned, relocatable package:
-```bash
-glue package math::fastmath --version 2.0.0
-```
-
-Glue generates:
-```text
-product/packages/math/fastmath/2.0.0/variants/<variant-id>/
-├── lib/fastmath.lib       # Windows Import Library (link-time symbols)
-├── bin/fastmath.dll       # Windows Dynamic Link Library (runtime payload)
-├── include/fastmath.h     # Public headers
-└── gluefile               # Variant export bindings
-```
-
-### Consumer (`simulation/here.glue`):
+**The Consumer Application (`app`):**
 ```glue
 import fastmath from "../fastmath"
-
-namespace app;
 
 exec.add(sim)
     .sources("src/main.c")
     .depends(fastmath::fastmath)
 ```
 
-Run with automatic runtime staging:
+Run it with:
 ```bash
 glue run sim
 ```
@@ -259,76 +145,124 @@ glue run sim
 ```text
 glue: Target artifact missing, building 'sim'...
 glue: Staged runtime artifact: fastmath.dll
-FastMath Multiply: 6 * 7 = 42
-FastMath Power: 2 ^ 8 = 256
+Simulation completed successfully!
 ```
-> [!NOTE]
-> Glue passes `lib/fastmath.lib` to MSVC `link.exe` during linkage, and automatically copies `bin/fastmath.dll` into `product/build/x86_64-windows/bin/` so the dynamic loader finds it immediately with zero configuration.
+Glue handles the link-time interface (`.lib`), copies the runtime payload (`.dll`) right next to `sim.exe`, and runs the program. **Zero missing DLL errors.**
 
 ---
 
-## Executable Narratives
+## Importing Packages from GitHub
 
-Glue includes self-verifying, reproducible narrative walkthroughs validating real-world engineering workflows:
+Import open-source libraries directly using intuitive package syntax:
 
-| Narrative | Path | Description |
+```glue
+import inih from github@pinwhell/inih version "^0.5.0"
+
+exec.add(config_reader)
+    .sources("src/main.c")
+    .depends(inih::inih)
+```
+
+Glue downloads the package to `.glue/cache/`, verifies its integrity, builds it with your active compiler, and locks the exact revision in `glue.lock`.
+
+---
+
+## Inspired by Rust's Cargo
+
+If you love Cargo, Glue will feel like second nature:
+
+| Cargo Workflow | Glue Equivalent | Description |
 |---|---|---|
-| **Shared Library Packaging** | [`narratives/shared-library-package`](narratives/shared-library-package/narrative.md) | Produces a shared library DLL/SO package and verifies automatic runtime deployment closure. |
-| **GitHub Package Import** | [`narratives/github-package-import`](narratives/github-package-import/narrative.md) | Consumes remote C libraries from GitHub (`pinwhell/inih`) with lockfile generation. |
-| **Locked Reproducible Builds** | [`narratives/locked-reproducible-builds`](narratives/locked-reproducible-builds/narrative.md) | Demonstrates deterministic compilation verification using `glue build --locked`. |
-| **Package Producer** | [`narratives/package-producer`](narratives/package-producer/narrative.md) | Packages static libraries with relocatable headers, variant manifests, and SHA-256 digests. |
-| **Package Consumer** | [`narratives/package-consumer`](narratives/package-consumer/narrative.md) | Consumes precompiled local packages with automatic fallback to source compilation. |
+| `cargo new foo` | `glue init foo` | Creates a new project workspace. |
+| `cargo build` | `glue build` | Compiles project targets using Ninja. |
+| `cargo run` | `glue run` | Compiles and executes an application immediately. |
+| `cargo build --locked` | `glue build --locked` | Verifies build against `glue.lock` without updating it (ideal for CI/CD). |
+| `cargo clean` | `glue clean` | Removes transient build artifacts in `product/build/`. |
+| `Cargo.lock` | `glue.lock` | Deterministic lockfile tracking all dependencies and SHA-256 digests. |
 
 ---
 
-## Crates Architecture
+## Clean, Predictable Directory Structure
 
-Glue is engineered as a clean, highly decoupled Rust workspace:
+Unlike CMake which scatters build files everywhere or leaves developers guessing where outputs landed, Glue enforces a clean, predictable topology:
 
-| Crate | Responsibility |
-|---|---|
-| [`crates/glue-model`](crates/glue-model) | Core entity model (`Target`, `TargetKind`, `Project`, `BuildProfile`). |
-| [`crates/glue-config`](crates/glue-config) | Lexer, recursive-descent parser, AST evaluator, and declarative dispatch. |
-| [`crates/glue-toolchains`](crates/glue-toolchains) | Toolchain autodetection and command abstraction (MSVC, Clang, GCC, `vcvarsall`). |
-| [`crates/glue-build`](crates/glue-build) | Dependency DAG planner, transitive include/define propagation, and deployment engine. |
-| [`crates/glue-backend-ninja`](crates/glue-backend-ninja) | Ultra-fast Ninja build graph generation, implicit output handling, and execution. |
-| [`crates/glue-packages`](crates/glue-packages) | Tripartite identity, package manifests (`package.toml`), and lockfiles (`glue.lock`). |
-| [`crates/glue-resolver`](crates/glue-resolver) | Semantic version resolution and dependency graph unification. |
-| [`crates/glue-platform-android`](crates/glue-platform-android) | Android NDK toolchain discovery and multi-ABI cross-compilation support. |
-| [`crates/glue-cli`](crates/glue-cli) | Command-line interface, argument parsing, logging, and user UX. |
+```text
+my-project/
+├── here.glue                 # Your declarative project configuration
+├── glue.lock                 # Pinned dependencies & cryptographic digests
+├── src/                      # Your C / C++ source code
+│   └── main.c
+├── include/                  # Your public header files
+│   └── my_project.h
+│
+├── product/                  # All generated outputs
+│   ├── build/                # Ephemeral build outputs (safe to delete anytime)
+│   │   └── x86_64-windows/
+│   │       ├── obj/          # Intermediate .obj / .o files
+│   │       └── bin/          # Linked executables & runtime DLLs
+│   │
+│   └── packages/             # Relocatable, versioned binary packages
+│       └── my_project/0.1.0/
+│
+└── .glue/                    # Engine cache (bare git clones, fingerprints)
+```
 
 ---
 
 ## Command Reference
 
-```text
-Usage: glue <COMMAND>
+Glue keeps its command-line interface clean and discoverable:
 
-Commands:
-  init     Initialize a new Glue project in the current directory
-  build    Compile targets and verify dependencies (--locked for CI verification)
-  run      Compile (if necessary) and execute an application target with full runtime closure
-  package  Produce a relocatable binary package under product/packages/
-  clean    Remove build tree (--all to purge packages and engine cache)
-  explain  Inspect target compilation units, includes, defines, and dependencies
-  graph    Emit Graphviz DOT graph visualizing the complete target build DAG
-  help     Print command-line help
+```bash
+# Initialize a new project
+glue init [name]
+
+# Build the project (or a specific target)
+glue build [target]
+
+# Build and run an executable target
+glue run [target] [-- args forwarded to program...]
+
+# Build strictly against glue.lock (fails if lockfile is out of date)
+glue build --locked
+
+# Package a library into a relocatable binary package
+glue package <target> --version <version>
+
+# Inspect targets, include paths, defines, and dependencies
+glue explain [target]
+
+# Export the build DAG in Graphviz DOT format to visualize dependencies
+glue graph
+
+# Clean build artifacts
+glue clean         # Removes product/build/
+glue clean --all   # Purges product/ and .glue/ cache
 ```
 
 ---
 
-## Acknowledgments & Credits
+## Self-Verifying Narratives
 
-Glue stands upon decades of open-source engineering excellence. We gratefully acknowledge:
+Glue's features are backed by executable, tested narratives in the [`narratives/`](narratives/) folder:
 
-- **[Evan Martin and the Ninja Authors](https://ninja-build.org/)** for building the definitive high-speed build execution backend.
-- **[Chris Lattner and the LLVM Community](https://llvm.org/)** for state-of-the-art compiler and linker infrastructure.
-- **[The Microsoft Visual C++ (MSVC) Team](https://visualstudio.microsoft.com/)** for Windows native toolchain standards.
-- **[The Rust Language & Cargo Teams](https://www.rust-lang.org/)** for pioneering modern package ergonomics and memory-safe systems software.
-- **[CMake (Kitware), Meson, and Bazel](https://cmake.org/)** for establishing the foundational concepts of native graph evaluation.
+- [**Shared Library Packaging & Deployment:**](narratives/shared-library-package/narrative.md) Packaging a shared DLL/SO and consuming it with automatic runtime deployment.
+- [**GitHub Package Import:**](narratives/github-package-import/narrative.md) Importing a remote C library from GitHub (`pinwhell/inih`).
+- [**Locked Reproducible Builds:**](narratives/locked-reproducible-builds/narrative.md) Frozen builds and verification using `glue.lock`.
+- [**Binary Package Production & Consumption:**](narratives/package-producer/narrative.md) Creating relocatable binary packages with detached SHA-256 digests.
+
+---
+
+## Built on the Shoulders of Giants
+
+Glue is a lightweight, ergonomic orchestration layer. We are deeply grateful to:
+- **[Evan Martin & the Ninja Team](https://ninja-build.org/):** For building the fastest, most reliable execution engine in software engineering.
+- **[The Rust Language & Cargo Team](https://www.rust-lang.org/):** For inspiring modern package management and developer ergonomics.
+- **[LLVM / Clang](https://llvm.org/) & [Microsoft MSVC](https://visualstudio.microsoft.com/):** For world-class native compiler toolchains.
+- **[CMake & Meson](https://cmake.org/):** For pioneering native build paradigms.
 
 ---
 
 ## License
 
-Glue is licensed under the [MIT License](LICENSE).
+Glue is distributed under the [MIT License](LICENSE).
