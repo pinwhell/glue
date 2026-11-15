@@ -1,0 +1,7 @@
+import inih from github@pinwhell/inih version "^0.5.0"
+
+namespace server;
+
+exec.add(service)
+    .sources("src/main.c")
+    .depends(inih::inih)

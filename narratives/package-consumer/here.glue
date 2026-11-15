@@ -1,0 +1,7 @@
+import math from "../package-producer"
+
+namespace app;
+
+exec.add(calculator)
+    .sources("src/main.c")
+    .depends(math::core)

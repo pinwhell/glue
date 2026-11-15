@@ -1,0 +1,10 @@
+when imported {
+    return package()
+}
+
+namespace math;
+
+shared_lib.add(fastmath)
+    .sources("src/fastmath.c")
+    .include.public("include")
+    .define("FASTMATH_EXPORTS")

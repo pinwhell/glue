@@ -1,0 +1,7 @@
+import inih from github@pinwhell/inih version "^0.5.0"
+
+namespace app;
+
+exec.add(ini_parser)
+    .sources("src/main.c")
+    .depends(inih::inih)

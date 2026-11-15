@@ -1,0 +1,5 @@
+namespace math;
+static_lib.add(core)
+    .prebuilt("lib/core.lib")
+    .include.public("include")
+

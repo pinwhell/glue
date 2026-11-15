@@ -25,6 +25,15 @@ pub struct Target {
     pub compile_flags: Vec<String>,
     pub link_flags: Vec<String>,
     pub output_name: Option<String>,
+    /// Path to a prebuilt library when this target is imported from a package.
+    pub prebuilt_artifact: Option<PathBuf>,
+    /// Runtime artifacts (e.g. DLLs, shared objects) required at execution time.
+    #[serde(default)]
+    pub runtime_artifacts: Vec<PathBuf>,
+    /// Source/include root for a target compiled from an imported source package.
+    pub source_root: Option<PathBuf>,
+    /// Original qualified name before this package was imported through an alias.
+    pub source_target: Option<String>,
 }
 
 impl Target {
@@ -41,6 +50,10 @@ impl Target {
             compile_flags: Vec::new(),
             link_flags: Vec::new(),
             output_name: None,
+            prebuilt_artifact: None,
+            runtime_artifacts: Vec::new(),
+            source_root: None,
+            source_target: None,
         }
     }
 
@@ -85,6 +98,27 @@ impl Target {
             }
         }
     }
+
+    pub fn link_library_name(&self, host_is_windows: bool) -> String {
+        let base = self.output_name.as_deref().unwrap_or(&self.name);
+        match self.kind {
+            TargetKind::StaticLib => {
+                if host_is_windows {
+                    format!("{}.lib", base)
+                } else {
+                    format!("lib{}.a", base)
+                }
+            }
+            TargetKind::SharedLib => {
+                if host_is_windows {
+                    format!("{}.lib", base)
+                } else {
+                    format!("lib{}.so", base)
+                }
+            }
+            _ => self.binary_name(host_is_windows),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,11 +128,21 @@ pub enum BuildProfile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportedPackageRecord {
+    pub alias: String,
+    pub source: String,
+    pub resolved_path: PathBuf,
+    pub version_req: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub name: String,
     pub root_dir: PathBuf,
     pub targets: HashMap<String, Target>,
     pub default_target: Option<String>,
+    #[serde(default)]
+    pub imported_packages: Vec<ImportedPackageRecord>,
 }
 
 impl Project {
@@ -108,6 +152,7 @@ impl Project {
             root_dir,
             targets: HashMap::new(),
             default_target: None,
+            imported_packages: Vec::new(),
         }
     }
 

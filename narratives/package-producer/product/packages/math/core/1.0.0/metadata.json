@@ -1,0 +1,13 @@
+{
+  "namespace": "math",
+  "name": "core",
+  "version": "1.0.0",
+  "variants": [
+    {
+      "id": "1560a9bc1a1ed121b89d81e1ea0235382df85f5dc479f6f982a3b3273f8186ef",
+      "os": "windows",
+      "arch": "x86_64",
+      "digest": "6f0140a0b63432cd0ff0112ccbf9dcf958ac7dcb6c20377085f85cf03bbca5bc"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+when imported {
+    return package()
+}
+
+namespace compress;
+
+static_lib.add(core)
+    .sources("src/codec.c")
+    .include.public("include")

@@ -110,3 +110,26 @@ namespace app {
     assert_eq!(app.namespace.as_deref(), Some("app"));
     assert_eq!(app.dependencies, vec!["core::core"]);
 }
+
+#[test]
+fn test_parse_github_package_import() {
+    let input = r#"
+import inih from github@pinwhell/inih
+
+exec.add(app)
+    .sources("src/main.c")
+    .depends(inih::inih)
+"#;
+    let temp_dir = std::env::temp_dir().join(format!("glue_test_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let mut lexer = Lexer::new(input);
+    let tokens = lexer.tokenize().expect("lexing failed");
+    let mut parser = Parser::new(tokens);
+    let project = parser
+        .parse_project("test_app", &temp_dir)
+        .expect("parsing failed");
+
+    assert!(project.imported_packages.iter().any(|pkg| pkg.source == "github@pinwhell/inih"));
+    assert!(project.targets.contains_key("inih::inih"));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

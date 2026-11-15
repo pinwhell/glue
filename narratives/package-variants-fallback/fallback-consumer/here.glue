@@ -1,0 +1,7 @@
+import compress from "../source-project"
+
+namespace demo;
+
+exec.add(compress_demo)
+    .sources("src/main.c")
+    .depends(compress::core)

@@ -215,8 +215,9 @@ impl Toolchain for MsvcToolchain {
 
     fn generate_ninja_rules(&self) -> String {
         format!(
-            "rule cc\n  command = \"{}\" /nologo /showIncludes /EHsc /MD /O2 /c $in /Fo$out $FLAGS $INCLUDES\n  description = CC $out\n  deps = msvc\n\nrule link\n  command = \"{}\" /nologo /OUT:$out $in $FLAGS $LIBS\n  description = LINK $out\n\nrule archive\n  command = \"{}\" /nologo /OUT:$out $in $FLAGS\n  description = AR $out\n\n",
+            "rule cc\n  command = \"{}\" /nologo /showIncludes /EHsc /MD /O2 /c $in /Fo$out $FLAGS $INCLUDES\n  description = CC $out\n  deps = msvc\n\nrule link\n  command = \"{}\" /nologo /OUT:$out $in $FLAGS $LIBS\n  description = LINK $out\n\nrule link_shared\n  command = \"{}\" /nologo /DLL /OUT:$out $in $FLAGS $LIBS\n  description = LINK_SHARED $out\n\nrule archive\n  command = \"{}\" /nologo /OUT:$out $in $FLAGS\n  description = AR $out\n\n",
             self.cl_path.display(),
+            self.link_path.display(),
             self.link_path.display(),
             self.lib_path.display()
         )
@@ -332,7 +333,8 @@ impl Toolchain for ClangToolchain {
 
     fn generate_ninja_rules(&self) -> String {
         format!(
-            "rule cc\n  command = \"{}\" -c $in -o $out -MMD -MF $out.d $FLAGS $INCLUDES\n  description = CC $out\n  depfile = $out.d\n  deps = gcc\n\nrule link\n  command = \"{}\" -o $out $in $FLAGS $LIBS\n  description = LINK $out\n\nrule archive\n  command = \"{}\" rcs $out $in\n  description = AR $out\n\n",
+            "rule cc\n  command = \"{}\" -c $in -o $out -MMD -MF $out.d $FLAGS $INCLUDES\n  description = CC $out\n  depfile = $out.d\n  deps = gcc\n\nrule link\n  command = \"{}\" -o $out $in $FLAGS $LIBS\n  description = LINK $out\n\nrule link_shared\n  command = \"{}\" -shared -o $out $in $FLAGS $LIBS\n  description = LINK_SHARED $out\n\nrule archive\n  command = \"{}\" rcs $out $in\n  description = AR $out\n\n",
+            self.clang_path.display(),
             self.clang_path.display(),
             self.clang_path.display(),
             self.ar_path.display()

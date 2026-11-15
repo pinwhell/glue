@@ -1,0 +1,7 @@
+import fastmath from "../fastmath"
+
+namespace app;
+
+exec.add(sim)
+    .sources("src/main.c")
+    .depends(fastmath::fastmath)

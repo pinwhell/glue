@@ -18,8 +18,20 @@ pub enum NinjaError {
     Build(#[from] BuildError),
 }
 
+fn clean_path_str(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    let s = if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        stripped
+    } else if let Some(stripped) = s.strip_prefix("//?/") {
+        stripped
+    } else {
+        &s
+    };
+    s.to_string()
+}
+
 fn escape_ninja_path(p: &Path) -> String {
-    let s = p.to_string_lossy().replace('\\', "/");
+    let s = clean_path_str(p).replace('\\', "/");
     let mut out = String::new();
     for c in s.chars() {
         match c {
@@ -105,10 +117,11 @@ impl<'a> NinjaBackend<'a> {
             for unit in &plan.compile_units {
                 let mut inc_flags = String::new();
                 for inc in &unit.include_dirs {
+                    let cleaned = clean_path_str(inc);
                     if self.toolchain.toolchain_type() == glue_toolchains::ToolchainType::Msvc {
-                        inc_flags.push_str(&format!(" \"/I{}\"", inc.display()));
+                        inc_flags.push_str(&format!(" \"/I{}\"", cleaned));
                     } else {
-                        inc_flags.push_str(&format!(" \"-I{}\"", inc.display()));
+                        inc_flags.push_str(&format!(" \"-I{}\"", cleaned));
                     }
                 }
 
@@ -147,7 +160,8 @@ impl<'a> NinjaBackend<'a> {
             }
 
             let rule = match plan.target.kind {
-                TargetKind::Exec | TargetKind::SharedLib => "link",
+                TargetKind::Exec => "link",
+                TargetKind::SharedLib => "link_shared",
                 TargetKind::StaticLib => "archive",
                 _ => "link",
             };
@@ -162,12 +176,19 @@ impl<'a> NinjaBackend<'a> {
 
             let mut libs_flags = String::new();
             for dep in &plan.dependent_lib_paths {
-                libs_flags.push_str(&format!(" \"{}\"", dep.display()));
+                libs_flags.push_str(&format!(" \"{}\"", clean_path_str(dep)));
+            }
+
+            let mut outputs_str = escape_ninja_path(&plan.output_path);
+            if cfg!(windows) && plan.target.kind == TargetKind::SharedLib {
+                let implib = plan.output_path.with_extension("lib");
+                outputs_str.push_str(" | ");
+                outputs_str.push_str(&escape_ninja_path(&implib));
             }
 
             content.push_str(&format!(
                 "build {}: {} {}{}\n  LIBS ={}\n\n",
-                escape_ninja_path(&plan.output_path),
+                outputs_str,
                 rule,
                 obj_paths.join(" "),
                 implicit_deps,

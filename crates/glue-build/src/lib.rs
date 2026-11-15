@@ -46,7 +46,8 @@ pub struct BuildPlanner<'a> {
 
 impl<'a> BuildPlanner<'a> {
     pub fn new(project: &'a Project, toolchain: &'a dyn Toolchain) -> Self {
-        let build_dir = project.root_dir.join(".glue").join("build");
+        let build_key = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
+        let build_dir = project.root_dir.join("product").join("build").join(build_key);
         Self {
             project,
             toolchain,
@@ -92,6 +93,10 @@ impl<'a> BuildPlanner<'a> {
         in_progress.remove(target_name);
         visited.insert(target_name.to_string());
 
+        if target.prebuilt_artifact.is_some() {
+            return Ok(());
+        }
+
         let plan = self.plan_target(target_name)?;
         plans.push(plan);
         Ok(())
@@ -108,27 +113,26 @@ impl<'a> BuildPlanner<'a> {
 
         let mut propagated_includes = Vec::new();
         let mut dependent_lib_paths = Vec::new();
+        let target_root = target.source_root.as_deref().unwrap_or(&self.project.root_dir);
 
-        // Collect propagated requirements and libraries from dependencies
+        // Collect transitive public requirements in link order: each dependency first,
+        // followed by the libraries it consumes.
+        let mut dependency_seen = HashSet::new();
         for dep_name in &target.dependencies {
-            if let Some(dep) = self.project.get_target(dep_name) {
-                // Public include dirs from dependencies are propagated to consumers
-                for inc in &dep.include_dirs_public {
-                    propagated_includes.push(self.project.root_dir.join(inc));
-                }
-
-                let dep_bin_name = dep.binary_name(cfg!(windows));
-                let dep_out = self.build_dir.join("bin").join(dep_bin_name);
-                dependent_lib_paths.push(dep_out);
-            }
+            self.collect_dependency_inputs(
+                dep_name,
+                &mut dependency_seen,
+                &mut propagated_includes,
+                &mut dependent_lib_paths,
+            )?;
         }
 
         let mut all_includes = Vec::new();
         for inc in &target.include_dirs_private {
-            all_includes.push(self.project.root_dir.join(inc));
+            all_includes.push(target_root.join(inc));
         }
         for inc in &target.include_dirs_public {
-            all_includes.push(self.project.root_dir.join(inc));
+            all_includes.push(target_root.join(inc));
         }
         all_includes.extend(propagated_includes);
 
@@ -140,7 +144,7 @@ impl<'a> BuildPlanner<'a> {
         for src in &target.sources {
             let src_str = src.to_string_lossy();
             if let Some(regex_pattern) = src_str.strip_prefix("regex:") {
-                let files = expand_regex_pattern(&self.project.root_dir, regex_pattern);
+                let files = expand_regex_pattern(target_root, regex_pattern);
                 if files.is_empty() {
                     return Err(BuildError::CompilationFailed {
                         target: target.name.clone(),
@@ -149,7 +153,7 @@ impl<'a> BuildPlanner<'a> {
                 }
                 expanded_sources.extend(files);
             } else {
-                let files = expand_glob_pattern(&self.project.root_dir, src);
+                let files = expand_glob_pattern(target_root, src);
                 if files.is_empty() && (src_str.contains('*') || src_str.contains('?')) {
                     return Err(BuildError::CompilationFailed {
                         target: target.name.clone(),
@@ -169,12 +173,19 @@ impl<'a> BuildPlanner<'a> {
             };
             let obj_path = target_obj_dir.join(obj_name);
 
+            let mut flags = target.compile_flags.clone();
+            if target.kind == glue_model::TargetKind::SharedLib && self.toolchain.toolchain_type() != glue_toolchains::ToolchainType::Msvc {
+                if !flags.iter().any(|f| f == "-fPIC") {
+                    flags.push("-fPIC".to_string());
+                }
+            }
+
             compile_units.push(CompileUnit {
                 source: full_src,
                 object: obj_path,
                 include_dirs: all_includes.clone(),
                 defines: target.defines.clone(),
-                flags: target.compile_flags.clone(),
+                flags,
             });
         }
 
@@ -187,6 +198,36 @@ impl<'a> BuildPlanner<'a> {
             output_path,
             dependent_lib_paths,
         })
+    }
+
+    fn collect_dependency_inputs(
+        &self,
+        target_name: &str,
+        visited: &mut HashSet<String>,
+        includes: &mut Vec<PathBuf>,
+        libraries: &mut Vec<PathBuf>,
+    ) -> Result<(), BuildError> {
+        if !visited.insert(target_name.to_string()) {
+            return Ok(());
+        }
+        let dependency = self.project.get_target(target_name)
+            .ok_or_else(|| BuildError::TargetNotFound(target_name.to_string()))?;
+        let dependency_root = dependency.source_root.as_deref().unwrap_or(&self.project.root_dir);
+        for include in &dependency.include_dirs_public {
+            includes.push(dependency_root.join(include));
+        }
+        if matches!(dependency.kind, glue_model::TargetKind::StaticLib | glue_model::TargetKind::SharedLib) {
+            let path = if let Some(artifact) = &dependency.prebuilt_artifact {
+                artifact.clone()
+            } else {
+                self.build_dir.join("bin").join(dependency.link_library_name(cfg!(windows)))
+            };
+            libraries.push(path);
+        }
+        for transitive in &dependency.dependencies {
+            self.collect_dependency_inputs(transitive, visited, includes, libraries)?;
+        }
+        Ok(())
     }
 
     fn check_circular(&self, target_name: &str, visited: &mut HashSet<String>) -> Result<(), BuildError> {
@@ -202,6 +243,76 @@ impl<'a> BuildPlanner<'a> {
 
         visited.remove(target_name);
         Ok(())
+    }
+
+    pub fn collect_transitive_runtime_artifacts(&self, target_name: &str) -> Result<Vec<PathBuf>, BuildError> {
+        let mut runtime_files = Vec::new();
+        let mut visited = HashSet::new();
+        self.collect_runtime_artifacts_recursive(target_name, &mut runtime_files, &mut visited)?;
+        Ok(runtime_files)
+    }
+
+    fn collect_runtime_artifacts_recursive(
+        &self,
+        target_name: &str,
+        runtime_files: &mut Vec<PathBuf>,
+        visited: &mut HashSet<String>,
+    ) -> Result<(), BuildError> {
+        if !visited.insert(target_name.to_string()) {
+            return Ok(());
+        }
+        let target = self
+            .project
+            .get_target(target_name)
+            .ok_or_else(|| BuildError::TargetNotFound(target_name.to_string()))?;
+
+        for dep in &target.dependencies {
+            if let Some(dep_target) = self.project.get_target(dep) {
+                for artifact in &dep_target.runtime_artifacts {
+                    if !runtime_files.contains(artifact) {
+                        runtime_files.push(artifact.clone());
+                    }
+                }
+                if dep_target.kind == glue_model::TargetKind::SharedLib && dep_target.prebuilt_artifact.is_none() {
+                    let in_tree_runtime = self.build_dir.join("bin").join(dep_target.binary_name(cfg!(windows)));
+                    if !runtime_files.contains(&in_tree_runtime) {
+                        runtime_files.push(in_tree_runtime);
+                    }
+                }
+            }
+            self.collect_runtime_artifacts_recursive(dep, runtime_files, visited)?;
+        }
+        Ok(())
+    }
+
+    pub fn deploy_runtime_artifacts(&self, target_name: &str) -> Result<Vec<PathBuf>, BuildError> {
+        let artifacts = self.collect_transitive_runtime_artifacts(target_name)?;
+        let bin_dir = self.build_dir.join("bin");
+        std::fs::create_dir_all(&bin_dir)?;
+        let mut deployed = Vec::new();
+        for artifact in artifacts {
+            let filename = artifact.file_name().ok_or_else(|| {
+                BuildError::CompilationFailed {
+                    target: target_name.to_string(),
+                    message: format!("Runtime artifact path '{}' has no filename", artifact.display()),
+                }
+            })?;
+            let dest = bin_dir.join(filename);
+            if artifact != dest {
+                let need_copy = if dest.exists() {
+                    let meta_src = std::fs::metadata(&artifact)?;
+                    let meta_dst = std::fs::metadata(&dest)?;
+                    meta_src.len() != meta_dst.len()
+                } else {
+                    true
+                };
+                if need_copy {
+                    std::fs::copy(&artifact, &dest)?;
+                }
+                deployed.push(dest);
+            }
+        }
+        Ok(deployed)
     }
 
     pub fn compute_source_fingerprint(source_path: &Path) -> Result<String, std::io::Error> {

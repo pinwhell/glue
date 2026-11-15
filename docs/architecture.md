@@ -2,1640 +2,876 @@
 ## A Unified Native Development System
 
 **Architecture & Design Specification**  
-**Version:** 0.3  
-**Status:** Proposed architecture  
-**Scope:** C, C++, package management, native build orchestration, toolchains, cross-compilation and ABI compatibility. Rust is a planned extension, not a prerequisite for the initial implementation.
+**Document Version:** 1.0  
+**Status:** Canonical Architectural Specification  
+**Primary Scope:** C, C++, native build orchestration, binary-first package management, multi-platform toolchain abstraction, cross-compilation, and ABI compatibility verification. Rust integration is specified as an architecturally planned extension.
 
 ---
 
 # 1. Abstract
 
-Glue is a native development system designed to unify project configuration, dependency management, compilation, linking and execution behind a consistent interface.
+Glue is a native development system designed to unify project configuration, package management, native compilation, linking, and runtime execution behind a single, coherent, and deterministic interface.
 
-Its design draws inspiration from CMake's target-oriented build model and the dependency-management experience of npm and Composer. Its goal is to make native development more approachable without sacrificing the flexibility required by real-world C and C++ projects.
+For decades, the native C and C++ ecosystems have suffered from fragmented tooling. Developers are forced to manually orchestrate disconnected tools: build systems (Make, CMake, Meson), package managers (vcpkg, Conan, system package managers), compiler frontends (GCC, Clang, MSVC), and platform SDKs (Android NDK, Windows SDK, Apple SDKs). This fragmentation introduces brittle configuration scripts, hidden environment dependencies, unverified ABI incompatibilities, and non-reproducible builds.
 
-Glue introduces a declarative project language, a unified target model, a package resolution system, a dependency lockfile, a graph-based build engine, configurable toolchains and a target-aware execution model.
+Glue addresses this challenge by establishing a unified, target-oriented model that combines the intuitive dependency management experience of modern package ecosystems with the rigorous low-level control demanded by systems software. Glue provides:
+- A compact, declarative configuration language (`gluefile`) with deterministic parsing and explicit scoping.
+- A **Binary-First, Source-Capable** package lifecycle that automatically leverages precompiled binary variants while preserving deterministic source-build fallback.
+- A tripartite identity model separating logical Package Coordinates, normalized Variant IDs, and cryptographic Content Digests.
+- A directed acyclic graph (DAG) build engine driven by content-based action fingerprinting and incremental invalidation.
+- A capability-oriented toolchain abstraction isolating native compiler idiosyncrasies from the core engine.
+- Explicit platform and ABI verification eliminating silent runtime incompatibilities.
 
-A project should be able to define an executable, import dependencies, select a compiler and target platform, and run the resulting program without manually coordinating the underlying tools.
+Glue does not attempt to rewrite battle-tested compilers, linkers, or platform sysroots. Instead, it acts as an authoritative native coordinator—governed by the fundamental principle:
 
-The same architecture should accommodate advanced requirements, including custom compilers, generated sources, cross-compilation, SDK integration, binary compatibility constraints, Android native development and interoperability between languages.
+$$\text{Project Intent} \xrightarrow{\text{Parse \& Validate}} \text{Target Model} \xrightarrow{\text{Resolve}} \text{Action DAG} \xrightarrow{\text{Execute}} \text{Verified Artifacts}$$
 
-Glue is not intended to replace every existing compiler, SDK or specialized build tool. It aims to coordinate them through a common project model and a predictable developer experience.
-
-The initial implementation prioritizes C and C++. Rust integration, advanced package distribution, remote build caching and broader platform support are designed as extensions of the core architecture.
-
-The central architectural principle is simple:
-
-**Describe what should be built, resolve what it requires, determine how the target can be built, and execute the resulting build plan.**
+---
 
 # 2. Vision and Scope
 
-## 2.1. Product vision
+## 2.1. Product Vision
 
-Glue aims to provide one coherent workflow for defining, building, managing and running native software.
+The primary mission of Glue is to make native software engineering intuitive, predictable, and robust across all development phases—from initial prototyping to enterprise-grade, multi-architecture distribution.
 
-A minimal project should be straightforward:
+A minimal native project requires only a single, expressive declaration:
 
 ```glue
 exec.add(hello).sources("hello.c")
 ```
 
-The developer should then be able to execute:
+Execution is invoked with zero manual compiler invocations:
 
 ```bash
 glue run hello
 ```
 
-Glue should resolve the project configuration, compile the necessary sources and launch the resulting executable.
+Glue discovers the local toolchain, constructs the compilation and link action graph, executes the actions, caches the outputs, and runs the resulting executable.
 
-As the project grows, the same model should support libraries, external dependencies, multiple compilers, different build configurations and alternative target platforms.
-
-For example:
+As the software evolves into complex, multi-package architectures, the mental model remains uniform:
 
 ```glue
-import json from github@alice/json
+import inih from github@pinwhell/inih version "^0.5.0"
 
 exec.add(app)
-    .sources("src/main.cpp")
-    .depends(json)
+    .sources("src/*.cpp")
+    .depends(inih)
 ```
 
-The intended experience is not merely a shorter syntax for compiler commands. It is a consistent way to express the relationships between source files, targets, packages, toolchains and platforms.
+The consumer expresses *what* dependencies and targets exist; Glue deterministically determines *how* to acquire, verify, build, and link them.
 
-## 2.2. What Glue is
+## 2.2. What Glue Is
 
-Glue is best understood as a **native development system with an integrated build engine and package manager**.
+Glue is an **integrated native development system**, combining:
+1. **A Declarative Configuration Language:** High-level project specifications without imperative scripting overhead.
+2. **A Binary-First Package Manager:** Multi-variant package acquisition, cryptographic integrity verification, and automatic source fallback.
+3. **An Incremental Build Engine:** Action DAG execution with content-hashed fingerprints, dynamic header scanning, and parallel execution.
+4. **A Multi-Platform Toolchain Coordinator:** Universal abstraction over Clang, GCC, MSVC, and cross-compilation toolchains (e.g., Android NDK).
+5. **A Runtime and Deployment Orchestrator:** Separation of compile-time, link-time, and runtime deployment requirements (such as DLL and shared library tracking).
 
-Its primary responsibilities are:
+## 2.3. What Glue Is Not
 
-- Project configuration.
-- Target and dependency modeling.
-- Native compilation and linking.
-- Package acquisition and resolution.
-- Incremental build planning.
-- Toolchain selection and integration.
-- Cross-compilation configuration.
-- Artifact compatibility validation.
-- Program execution and test orchestration.
+To maintain architectural integrity and lean execution, Glue explicitly defines its non-goals:
+- **Glue is not a compiler or linker:** It coordinates industry-standard compilers (LLVM/Clang, GCC, MSVC/LINK).
+- **Glue is not a general-purpose programming language interpreter:** Configuration files are declarative specifications, not Turing-complete scripts.
+- **Glue is not an OS container or full virtualization engine:** It manages build actions and native artifacts, delegating operating-system virtualization to dedicated systems when required.
+- **Glue is not an application store packager:** It outputs relocatable native libraries and executables; platform packaging formats (such as Android APKs/AABs or macOS application bundles) reside at the integration boundary.
 
-## 2.3. What Glue is not
+---
 
-The initial architecture does not require Glue to implement its own compiler, linker, operating-system SDK or runtime.
+# 3. Core Design Principles
 
-It should use existing tools wherever possible.
+### 3.1. One Coherent Project Model
+All entities—targets, dependencies, source sets, compile flags, platform requirements, and binary artifacts—are represented in a unified semantic model. Subsystems operate on this shared representation without semantic drift.
 
-It also should not initially attempt to replace complete application development ecosystems such as Android's application packaging workflow.
+### 3.2. Simple by Default, Explicit When Necessary
+A single executable requires only one line of configuration. However, when complex requirements arise—such as custom sysroots, specific C++ ABI variants, or static runtime linkages—Glue provides explicit, first-class configuration mechanisms. Glue never conceals meaningful decisions behind opaque heuristics.
 
-Glue can integrate with those systems without assuming responsibility for every part of them.
+### 3.3. Binary-First, Source-Capable
+Packages prioritize binary distribution for fast, reliable consumption across development environments, while maintaining strict, automated source compilation fallback when matching binaries are absent.
 
-# 3. Design Principles
+### 3.4. Absolute Separation of Identities
+Glue enforces three distinct identity dimensions:
+- **Package Coordinate:** Semantic, human-readable identity (`<namespace>/<name>@<version>`).
+- **Variant ID:** Normalized configuration hash defining target platform, ABI, toolchain baseline, and feature options.
+- **Content Digest:** Cryptographic checksum (SHA-256) verifying the physical integrity of the artifact payload.
 
-## 3.1. One coherent project model
+### 3.5. Reproducibility by Design
+Every build decision is governed by explicit inputs: source revisions, toolchain versions, platform triples, and effective flags. Build actions are indexed by cryptographic fingerprints. A locked configuration (`glue.lock`) guarantees identical dependency graphs across distinct environments.
 
-Targets, dependencies, compiler requirements and platform constraints should be represented in a common model.
+### 3.6. Toolchains as Adapters
+Compilers and linkers are modeled as interchangeable capability providers. Toolchain-specific command-line flags and idiosyncrasies are encapsulated within modular adapters, preserving engine neutrality.
 
-Separate subsystems may implement different responsibilities, but they must agree on the meaning of a target, package identity and artifact.
+### 3.7. Relocatable and Self-Contained Artifacts
+Published package products are completely relocatable. Packages must never embed host-specific absolute paths. A package produced on machine A must be unpackable and consumable on machine B without path mutations.
 
-## 3.2. Simple by default
+### 3.8. Correctness Before Optimization
+A fast build that produces an incorrect binary is fundamentally defective. Glue enforces rigorous invalidation, conservative ABI checking, and fail-stop error handling before optimizing for concurrency and caching.
 
-A basic executable should require as little configuration as possible.
-
-Advanced features should remain available without forcing every project to declare toolchains, sysroots, ABI settings or compiler arguments explicitly.
-
-## 3.3. Explicit when necessary
-
-When automatic resolution becomes ambiguous, Glue should require explicit configuration rather than silently selecting an incompatible compiler, package or artifact.
-
-Defaults should reduce configuration, not conceal meaningful decisions.
-
-## 3.4. Reproducibility by design
-
-Package versions, source revisions, compiler identities, target properties and build inputs should be represented explicitly enough to reproduce builds under equivalent conditions.
-
-Reproducibility must be treated as an architectural concern rather than a feature added after caching.
-
-## 3.5. Existing tools remain first-class
-
-Glue should orchestrate compilers and linkers through adapters.
-
-Users should retain access to compiler-specific options, SDK functionality and specialized workflows when the generic model is insufficient.
-
-## 3.6. Separate identity from naming
-
-A package's display name must not determine its identity.
-
-Likewise, a target's name, a binary's filename and the identity of the package exporting that target are distinct concepts.
-
-## 3.7. Stable boundaries, extensible implementations
-
-The public configuration language, internal project model, build engine and toolchain interfaces should evolve independently whenever possible.
-
-## 3.8. Correctness before optimization
-
-The first build engine should prioritize correct dependency tracking, reliable invalidation and accurate diagnostics.
-
-Parallelism and caching should be introduced without compromising those guarantees.
+---
 
 # 4. System Architecture
 
-Glue should be organized as a sequence of transformations between well-defined representations.
+Glue is architected as an unidirectional transformation pipeline between strongly-typed intermediate representations:
 
-The complete workflow is:
-
-```text
-Project Configuration
-        |
-        v
-Lexer and Parser
-        |
-        v
-Configuration AST
-        |
-        v
-Semantic Validation
-        |
-        v
-Normalized Project Model
-        |
-        v
-Dependency Resolution
-        |
-        v
-Resolved Project Model
-        |
-        v
-Target and Toolchain Resolution
-        |
-        v
-Build Graph Planner
-        |
-        v
-Build Action Graph
-        |
-        v
-Scheduler and Executor
-        |
-        v
-Artifacts
-        |
-        v
-Run / Test / Install / Package
+```mermaid
+flowchart TD
+    Config[gluefile Configuration] -->|Lex & Parse| AST[Abstract Syntax Tree]
+    AST -->|Semantic Analysis & Context Dispatch| NPM[Normalized Project Model]
+    NPM -->|Package Resolution & Lockfile| RPM[Resolved Project Model]
+    RPM -->|Toolchain & Platform Selection| TPM[Target Platform Model]
+    TPM -->|Build Graph Planning| DAG[Action DAG]
+    DAG -->|Scheduler & Concurrency Control| Exec[Action Executor]
+    Exec -->|Adapters| Toolchains[Clang / GCC / MSVC / NDK]
+    Toolchains -->|Artifact Generation| Storage[Artifact Storage & Packages]
+    Storage --> CLI[Run / Test / Package / Distribute]
 ```
 
-Not every command needs to execute every stage.
+## 4.1. Core Architectural Subsystems
 
-For example, a command that inspects a project should not need to compile it. A dependency-resolution command should not launch an executable.
+| Subsystem | Responsibilities | Key Invariants |
+|---|---|---|
+| **Configuration Frontend** | Tokenization, grammar parsing, AST construction, and static semantic validation. | Pure functional transformation; syntax is decoupled from semantic execution. |
+| **Context Dispatcher** | Evaluates file context: *Project Context*, *Imported Context*, or *Package-Build Context*. | Declarative routing; prevents cyclic self-referencing during source fallback. |
+| **Package Resolver** | Graph resolution, SAT-based version constraint solving, and lockfile synchronization. | Deterministic resolution; pinned source revisions and strict integrity checks. |
+| **Artifact & Variant Engine** | Binary variant matching, ABI matrix evaluation, payload extraction, and staging. | Variant ID matching; physical payload verification via detached SHA-256 digests. |
+| **Toolchain Subsystem** | Host environment discovery, cross-toolchain instantiation, and capability detection. | Toolchain-neutral operation model (`CompileRequest`, `LinkRequest`). |
+| **Build Planner & DAG** | Transforms targets into atomic compilation, generation, and linkage actions. | Strict DAG; cycle detection; content-hash action fingerprinting. |
+| **Action Scheduler & Executor**| Concurrency-controlled execution, dynamic dependency injection, and process isolation. | Non-zero exit code propagation; atomic generation of target outputs. |
+| **Storage & Cache Manager** | Partitions `product/build`, `product/packages`, and `.glue/` cache. | Clean boundaries; package products survive build directory clean operations. |
 
-## 4.1. Core components
+---
 
-The architecture consists of the following logical components.
+# 5. Project Configuration Language (`gluefile`)
 
-| Component | Responsibility |
-|---|---|
-| Configuration frontend | Parses and validates project declarations |
-| Project model | Represents targets, properties and relationships |
-| Package resolver | Resolves package identities and versions |
-| Source providers | Acquires source packages and repository revisions |
-| Lockfile manager | Records and verifies resolved dependencies |
-| Target resolver | Determines platform and ABI requirements |
-| Toolchain manager | Discovers and selects compatible tools |
-| Build planner | Converts targets into build actions |
-| Scheduler | Orders and parallelizes independent actions |
-| Action executor | Runs compilers, linkers and generators |
-| Artifact store | Tracks outputs and caches reusable results |
-| CLI | Exposes build, run, test, clean and inspection commands |
+Glue provides a clean, declarative configuration grammar designed specifically for native systems development.
 
-These components should initially be logical modules. They do not need to be separate processes or independently distributed packages.
+## 5.1. Syntax and Target Declarations
 
-# 5. Project Configuration Language
-
-Glue should provide a compact declarative language designed specifically for native project configuration.
-
-The language should be expressive enough for common build requirements while remaining easy to parse, validate and inspect.
-
-## 5.1. Basic syntax
-
-A minimal executable:
+A `gluefile` contains target declarations, package imports, and scoping directives:
 
 ```glue
-exec.add(hello).sources("hello.c")
-```
-
-An expanded equivalent:
-
-```glue
-exec.add(hello)
-    .sources("hello.c")
-```
-
-A library:
-
-```glue
-static_lib.add(core)
-    .sources("src/core.c")
-    .include.public("include")
-```
-
-An executable consuming that library:
-
-```glue
-exec.add(app)
-    .sources("src/main.c")
-    .depends(core)
-```
-
-The language should support chained declarations without making chaining mandatory.
-
-## 5.2. Initial target declarations
-
-The initial target types should include:
-
-| Target type | Output |
-|---|---|
-| `exec` | Executable |
-| `static_lib` | Static library |
-| `shared_lib` | Shared library |
-| `object_lib` | Reusable object files |
-| `interface_lib` | Propagated usage requirements |
-| `custom` | Generated artifacts or custom operations |
-
-The exact public names can change during language design, but their semantics must be stable.
-
-## 5.3. Sources
-
-Targets should accept explicit source declarations:
-
-```glue
-exec.add(app)
-    .sources(
-        "src/main.cpp",
-        "src/parser.cpp"
-    )
-```
-
-Glue should also support generated sources.
-
-### Glob patterns
-
-The declarative language supports file globbing patterns (e.g., `"src/*.c"`) to match groups of source files ergonomically:
-
-```glue
-static_lib.add(core)
+// Declaring a static library with explicit include visibility
+static_lib.add(crypto)
     .sources("src/*.c")
-
-exec.add(app)
-    .sources(
-        "src/*.cpp",
-        "generated/parser.cpp"
-    )
-```
-
-**Resolution semantics for glob patterns:**
-- Patterns such as `"src/*.c"`, `"engine/*.cpp"`, and `"tests/test_*.c"` are evaluated relative to the project root directory during project configuration.
-- Glob expansion results are deterministically sorted alphabetically by path to guarantee reproducible build plans across machines and operating systems.
-- Unmatched glob patterns produce an early diagnostic before scheduling build actions, preventing silent compilation omissions.
-
-### Regular expression patterns
-
-In succession with glob patterns, Glue supports regular expression matching for fine-grained source discovery (such as versioned source files, complex naming conventions, or filtered subsets):
-
-```glue
-static_lib.add(core)
-    .sources("regex:src/core_v[0-9]+\\.c")
-
-exec.add(app)
-    .sources(
-        "regex:src/v[0-9]+_.*\\.cpp",
-        "generated/parser.cpp"
-    )
-```
-
-**Resolution semantics for regex patterns:**
-- Regex source specifications begin with the `regex:` prefix (or `.sources.regex(...)`) and evaluate an expression against candidate files within the specified search directory.
-- Candidate files are discovered in the base path and filtered against the regular expression.
-- Matched file lists are deterministically sorted alphabetically by path to maintain reproducible build graphs across platforms.
-- If a regex pattern matches zero files, Glue raises an early configuration diagnostic to prevent unexpected empty targets.
-
-Automatic source discovery may be offered as an optional convenience, but explicit source declarations, globs and regex patterns remain the predictable default.
-
-This avoids unexpectedly adding files to a build simply because they appeared in a directory.
-
-## 5.4. Include directories and definitions
-
-Include directories should have explicit visibility:
-
-```glue
-static_lib.add(core)
-    .include.private("src/internal")
     .include.public("include")
+    .include.private("src/internal")
+    .define("CRYPTO_VERSION", "2.1.0")
+
+// Declaring an executable dependent on the library
+exec.add(server)
+    .sources("src/main.cpp", "src/server.cpp")
+    .depends(crypto)
+    .options.optimize("speed")
 ```
 
-Compile definitions should be similarly scoped:
+### Supported Target Archetypes
 
+| Target Type | Primary Output | Compilation Semantics | Linkage Semantics |
+|---|---|---|---|
+| `exec` | Executable binary (`.exe`, ELF binary, Mach-O) | Compiles all local sources to object files. | Links objects, resolved static archives, and dynamic import libraries. |
+| `static_lib` | Static library archive (`.a`, `.lib`) | Compiles sources into position-independent or target object files. | Archives objects using `ar`, `llvm-ar`, or `lib.exe`. |
+| `shared_lib` | Shared library (`.so`, `.dll`, `.dylib`) | Compiles sources with position-independent code (`-fPIC` / dllexport). | Links shared object; produces import library (`.lib`) on Windows. |
+| `object_lib` | Object file collection | Compiles sources to relocatable objects. | No linkage; propagates raw object files directly to consuming targets. |
+| `interface_lib`| Header-only / Interface | No compilation actions. | Transmit public includes, definitions, and interface flags to consumers. |
+| `custom` | Synthetic / Generated artifacts | Executes custom generators or tooling. | Outputs feed downstream compilation actions as declared inputs. |
+
+## 5.2. Source Discovery: Explicit, Globbing, and Regular Expressions
+
+Glue enforces deterministic source evaluation. Sources may be declared explicitly or via patterns:
+
+### 1. Explicit Declarations
 ```glue
-exec.add(app)
-    .define("APP_VERSION", "1")
+exec.add(app).sources("src/main.c", "src/util.c")
 ```
 
-Glue must distinguish compile properties from link properties and avoid propagating settings indiscriminately.
-
-## 5.5. Dependency declarations
-
-Targets should express dependencies directly:
-
+### 2. Globbing Patterns
 ```glue
-exec.add(app)
-    .sources("src/main.cpp")
-    .depends(core)
+static_lib.add(core).sources("src/*.c", "src/platform/*.c")
 ```
+- Glob patterns (`*`, `**`, `?`) are evaluated relative to the project root directory during project configuration.
+- Matched file lists are sorted lexicographically by canonical path to guarantee cross-platform build reproducibility.
+- If a glob pattern fails to match any candidate file, Glue raises an early diagnostic error, preventing silent compilation omissions.
 
-A dependency reference should resolve to a specific target identity during semantic validation.
-
-An unresolved reference should produce an error before compilation begins.
-
-## 5.6. Configuration language semantics
-
-The configuration language should initially support:
-
-- Identifiers.
-- Strings.
-- Numbers and booleans.
-- Lists.
-- Function and method calls.
-- Target declarations.
-- Dependency imports.
-- Build configuration declarations.
-- Comments.
-
-The language should not require arbitrary imperative execution to express ordinary project configuration.
-
-This enables static validation, deterministic parsing and future IDE support.
-
-## 5.7. Syntax and semantics are separate
-
-The following declarations should produce equivalent internal models:
-
+### 3. Regular Expression Patterns
 ```glue
-exec.add(app).sources("main.c")
+exec.add(app).sources("regex:src/core_v[0-9]+\\.c", "regex:src/module_.*\\.cpp")
+```
+- Regex patterns are indicated by the `regex:` prefix.
+- The engine discovers candidate files within the target directory path and filters filenames against the compiled regular expression.
+- Matched paths are sorted deterministically in lexicographical order. Empty matches trigger an early diagnostic.
+
+## 5.3. Include Visibility and Property Propagation
+
+Glue follows a transitive property propagation model across target dependencies:
+
+```mermaid
+flowchart LR
+    SubDep[Library B: Core] -->|Public Includes / Defines| Dep[Library A: Engine]
+    Dep -->|Public Includes / Defines| Target[Executable: App]
+    Dep -.->|Private Includes / Defines| Dep
 ```
 
-```glue
-exec.add(app)
-    .sources("main.c")
-```
+- **`include.public(path)`**: Exported to any downstream target depending on this target.
+- **`include.private(path)`**: Accessible only during the compilation of this target's own sources.
+- **`define(key, value)`**: Compiler preprocessor definitions with public/private scoping.
+- **`depends(...)`**: Links target artifacts and inherits public compile properties transitively.
 
-The parser should produce an abstract syntax tree. Semantic validation should then transform it into a normalized project representation.
+## 5.4. Namespaces and Target Qualification
 
-The build engine should never depend directly on formatting or syntax choices.
+Namespaces prevent naming collisions across subprojects and imported third-party packages.
 
-## 5.8. Namespaces and target qualification
-
-Glue supports namespaces to prevent target name collisions across modular projects, subprojects, and imported third-party packages.
-
-### Namespace declarations
-
-Projects can declare a namespace to scope their exposed targets:
-
+### Global File Namespace
 ```glue
 namespace openssl;
 
-static_lib.add(crypto)
-    .sources("src/crypto.c")
-    .include.public("include")
+static_lib.add(crypto).sources("src/crypto.c").include.public("include")
+static_lib.add(ssl).sources("src/ssl.c").depends(crypto)
 ```
 
-Alternatively, scoped blocks may group targets under explicit namespaces:
-
+### Block Scoped Namespaces
 ```glue
-namespace openssl {
-    static_lib.add(ssl)
-        .sources("src/ssl.c")
-        .include.public("include")
+namespace engine {
+    static_lib.add(renderer).sources("src/render/*.cpp")
 }
 ```
 
-### Qualified target references
-
-Consumers refer to namespaced targets using double-colon qualification syntax:
-
+### Target Qualification Syntax
+Consumers access namespaced targets via double-colon (`::`) qualification:
 ```glue
-import openssl from "../openssl"
+import openssl from github@openssl/openssl version "^3.0.0"
 
-exec.add(client)
-    .sources("src/client.c")
+exec.add(gateway)
+    .sources("src/main.cpp")
     .depends(openssl::ssl)
 ```
 
-If a package exports a primary target matching its package name, or if aliasing is configured, Glue resolves both qualified (`openssl::ssl`) and package-level references (`openssl`) according to project-level visibility rules.
+## 5.5. Evaluation Contexts and Declarative Import Dispatch
 
-# 6. Package Management
-
-Glue's package manager should make local and remote dependencies available through a consistent interface.
-
-It should support source packages first, while allowing compatible binary packages to be introduced without changing the project's dependency model.
-
-## 6.1. Package sources
-
-The initial source types should be:
-
-**GitHub repositories**
+A central architectural innovation of Glue is the formal separation of project evaluation contexts via declarative dispatch:
 
 ```glue
-import json from github@alice/json
+when imported {
+    return package()
+}
+
+// =========================================================================
+// Developer Workspace Declarations (Active only in Project Context)
+// =========================================================================
+static_lib.add(core).sources("src/*.c").include.public("include")
+exec.add(run_tests).sources("tests/*.c").depends(core)
 ```
 
-**Local directories**
+### Operational Semantics of Context Transitions
 
-```glue
-import core from vendor@../core
+```mermaid
+stateDiagram-v2
+    [*] --> EvaluationDispatch
+    
+    EvaluationDispatch --> ProjectContext: CLI invoked locally (glue build/run/package)
+    EvaluationDispatch --> ImportedContext: Project evaluated as dependency (import foo)
+    EvaluationDispatch --> PackageBuildContext: Source fallback build triggered
+    
+    ProjectContext --> EvaluateFullTree: Ignore 'when imported' branch; evaluate targets & tests
+    ImportedContext --> RouteToPackageProduct: 'when imported' triggers return package()
+    PackageBuildContext --> EvaluateSourceRecipe: Bypass 'when imported'; compile package targets
 ```
 
-**Arbitrary Git repositories**
+1. **Project Context (`CTX_PROJECT`):**
+   - Active when a developer executes `glue build`, `glue test`, or `glue run` inside their repository checkout.
+   - The `when imported` block is statically recognized but its branch is not taken. The full `gluefile` is evaluated, enabling developers to build internal test suites, examples, and development targets.
+2. **Imported Context (`CTX_IMPORTED`):**
+   - Active when Glue evaluates this project as an imported dependency from another project.
+   - The engine halts evaluation at `when imported { return package() }`. It immediately routes consumption to the precompiled, relocatable package manifest at `product/packages/<namespace>/<name>/<version>/gluefile`.
+   - The consumer never parses the producer's internal test targets or local developer build actions.
+3. **Package-Build Context (`CTX_PACKAGE_BUILD`):**
+   - Active when a consumer requests a package variant that is not precompiled, initiating a **source fallback build**.
+   - The engine explicitly enters the package-build context, which **disables the `when imported` branch**.
+   - Glue compiles only the declared package export targets directly from source, outputting the resulting variant into `product/packages/`, eliminating infinite recursion.
 
-```glue
-import compression from git@"https://example.org/compression.git"
+---
+
+# 6. Binary-First Package Management System
+
+Glue's package manager combines binary distribution speed with source compilation resilience.
+
+```mermaid
+flowchart TD
+    Req[Dependency Requested: package@version] --> CacheCheck{Local Variant Exists?}
+    CacheCheck -- Yes --> VerifyDigest[Verify Payload Content Digest]
+    VerifyDigest -- Valid --> Link[Inject Include & Link Graph]
+    VerifyDigest -- Corrupted --> FailIntegrity[FAIL: Integrity Mismatch]
+    
+    CacheCheck -- No --> RemoteCheck{Matching Published Binary?}
+    RemoteCheck -- Yes --> Download[Fetch Binary Variant Archive]
+    Download --> Unpack[Unpack to Staging Directory]
+    Unpack --> VerifyDigest
+    
+    RemoteCheck -- No --> PolicyCheck{Resolution Policy Allows Source Build?}
+    PolicyCheck -- No --> FailMissing[FAIL: Compatible Binary Unavailable]
+    PolicyCheck -- Yes --> ToolchainCheck{Compatible Target Toolchain Available?}
+    ToolchainCheck -- No --> FailToolchain[FAIL: Missing Toolchain for Target ABI]
+    ToolchainCheck -- Yes --> SourceBuild[Execute Package-Build Context from Pinned Source]
+    SourceBuild --> CommitVariant[Commit Variant to product/packages/]
+    CommitVariant --> Link
 ```
 
-These examples represent proposed syntax.
+## 6.1. Tripartite Identity Model
 
-Each source provider should implement a common acquisition interface, allowing additional providers and registries to be introduced later.
-
-## 6.2. Version constraints
-
-Remote packages should support explicit version constraints:
-
-```glue
-import json from github@alice/json version "^2.0"
-```
-
-A version constraint describes acceptable releases.
-
-The resolver selects a version satisfying the constraints, then records the exact immutable revision used by the project.
-
-The selected version and exact revision must not be treated as interchangeable.
-
-## 6.3. Package identity
-
-A package identity should distinguish at least:
-
-- Source provider.
-- Repository or registry identity.
-- Package identity within that source.
-- Resolved revision.
-- Relevant package metadata.
-
-Two packages with the same display name but different identities must be distinguishable.
-
-The implementation should use structured identities rather than relying on string concatenation throughout the codebase.
-
-## 6.4. Namespaces
-
-Packages should expose qualified target names.
-
-For example:
+Traditional package systems frequently conflate identity, compatibility, and verification into a single hash. Glue models them as three mathematically independent dimensions:
 
 ```text
-alice_json::json
-bob_json::json
+┌────────────────────────────────────────────────────────────────────────┐
+│                        TRIPARTITE IDENTITY MODEL                       │
+├────────────────────────────────┬───────────────────────────────────────┤
+│ 1. Package Coordinate          │ github@pinwhell/inih@0.5.0            │
+│    (Logical / Upstream)        │ - Pinned source repository revision   │
+│                                │ - Semantic version & namespace        │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ 2. Variant ID                  │ var_x86_64_linux_gnu_opt_fpic_a3f9    │
+│    (Compatibility Matrix)      │ - Target OS, Arch, ABI, Sysroot       │
+│                                │ - Compiler baseline & C++ runtime     │
+│                                │ - Feature flags & linkage mode        │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ 3. Content Digest              │ sha256:e3b0c44298fc1c149afbf4c8996fb92 │
+│    (Physical Integrity)        │ - Detached cryptographic hash of the  │
+│                                │   canonical payload directory tree    │
+└────────────────────────────────┴───────────────────────────────────────┘
 ```
 
-These names are illustrative.
+1. **Package Coordinate:** Semantic identity (`<provider>@<namespace>/<name>@<version>`). Identifies the source codebase and immutable commit revision.
+2. **Variant ID:** A deterministic hash of the normalized compilation parameters:
+   $$\text{Variant ID} = H(\text{TargetTriple} \parallel \text{ABI} \parallel \text{RuntimeBaseline} \parallel \text{ToolchainClass} \parallel \text{Linkage} \parallel \text{Options})$$
+3. **Content Digest:** Cryptographic SHA-256 digest computed over the canonicalized file tree of the extracted package variant.
 
-Glue should allow a consumer to define a local alias without changing the canonical package identity.
+## 6.2. Linkage Semantics and C-Runtime Boundaries
 
-Namespaces prevent ambiguity in the build model, but they do not automatically eliminate symbol collisions in compiled C or C++ binaries.
+Native linking involves subtle platform constraints that must be modeled explicitly:
 
-### Resolution and Scoping Rules
+### Static Archives (`.a`, `.lib`)
+- A static archive is a container of object files.
+- **Invariance:** Static linking does **not** guarantee universal portability. A `.a` library compiled against glibc 2.38 cannot link on a system running glibc 2.31.
+- On Windows, a `.lib` file can be an **archive of static objects** or an **import library** referencing an external DLL. Glue's package metadata explicitly tags the role of each library file.
 
-1. **Canonical Qualification:** Every target in the project graph has a canonical name `<namespace>::<target>`. Targets declared without an explicit namespace default to the project's root namespace.
-2. **Local Aliases:** Consumers may bind local aliases during import to avoid deep hierarchies or resolve local naming preferences:
-   ```glue
-   import json from github@alice/json as local_json
-   ```
-3. **Collision Isolation:** Two packages exporting identically named internal targets (such as `core` or `utils`) coexist cleanly in the build graph because their graph identities are partitioned by their package namespaces.
-4. **Symbol Visibility vs Target Scoping:** Target namespaces ensure unambiguous DAG operations and linker inputs, but native C/C++ global symbols still require appropriate compiler visibility attributes or namespace encapsulation to prevent runtime symbol collisions.
+### Shared Objects (`.so`, `.dll`, `.dylib`)
+Shared libraries require two distinct models:
+1. **Link-Time Model:** Supplies symbols to the linker (e.g., direct `.so` linking on Linux; import `.lib` linking on Windows).
+2. **Runtime Deployment Model:** Specifies how the dynamic runtime payload is discovered by the operating system loader:
+   - **Windows:** Deployment of `.dll` binaries alongside the consuming executable in `product/build/<key>/bin/` or explicit PATH configuration.
+   - **Linux / ELF:** Setting `DT_RUNPATH` with `$ORIGIN/../lib` to ensure fully relocatable runtime execution without global root installation.
+   - **macOS / Mach-O:** Configuring `@rpath` and `@loader_path` load commands.
 
-## 6.5. Package manifests
+## 6.3. Binary Variant Compatibility Matrix
 
-Each distributable package should have a manifest describing:
+When evaluating whether a candidate precompiled binary variant can be consumed by the active target build, Glue validates every dimension of the compatibility matrix:
 
-- Package identity and version.
-- Exported targets.
-- Source files or artifact metadata.
-- Public usage requirements.
-- Dependencies.
-- Supported platforms.
-- Package metadata format version.
+| Dimension | Checked Properties | Invalidation / Rejection Condition |
+|---|---|---|
+| **Architecture & OS** | CPU (`x86_64`, `aarch64`, `armv7`), OS (`linux`, `windows`, `android`, `darwin`). | Any difference in architecture or OS immediately rejects the variant. |
+| **ABI & Calling Convention**| EABI, HardFloat/SoftFloat, Windows x64 ABI, Android NDK ABI (`arm64-v8a`). | Mismatch in calling convention or ABI level. |
+| **C Runtime (CRT)** | MSVC (`/MD`, `/MT`, `/MDd`, `/MTd`), Linux libc (glibc version baseline vs musl). | Incompatible CRT linkage causes memory allocator corruption and is strictly rejected. |
+| **C++ Standard Library**| `libstdc++` (Dual ABI `_GLIBCXX_USE_CXX11_ABI`), `libc++`, MSVC STL toolset. | Mixing conflicting C++ standard library runtimes is rejected. |
+| **Relocation Model** | Position Independent Code (`-fPIC` / `-fPIE`) vs static non-PIC. | Non-PIC objects cannot be linked into shared libraries. |
 
-A proposed filename is `glue.package`.
+## 6.4. Resolution Policies
 
-The initial manifest format may use TOML, provided its schema is explicitly versioned.
-
-## 6.6. Dependency resolution
-
-The resolver should construct a graph of package identities and version constraints.
-
-It must detect:
-
-- Unsatisfied version requirements.
-- Missing source revisions.
-- Invalid manifests.
-- Unresolvable package identities.
-- Unsupported package metadata.
-- Dependency cycles where the package model prohibits them.
-
-Package dependencies and target dependencies should remain separate.
-
-One package may expose multiple targets, and a consumer should not need to build every target exported by that package.
-
-## 6.7. Source and binary packages
-
-Glue should support three package delivery modes over time:
-
-1. Source packages compiled by Glue.
-2. Binary packages compatible with a selected target.
-3. Hybrid packages that offer both source and binary artifacts.
-
-Binary package selection must account for the platform, architecture, ABI, runtime requirements and toolchain compatibility where relevant.
-
-A binary built for Linux ARM64 must not be assumed compatible with Android ARM64 merely because the CPU architecture matches.
-
-## 6.8. Dependency cache
-
-Downloaded packages should be cached separately from project build outputs.
-
-A possible layout is:
-
-```text
-glue-cache/
-    sources/
-    packages/
-    artifacts/
-```
-
-Immutable source revisions and verified content digests should identify cached package contents.
-
-The cache must never treat package names alone as sufficient identifiers.
-
-# 7. Lockfile and Reproducibility
-
-Glue should maintain a lockfile recording the exact dependency resolution.
-
-A proposed filename is:
-
-```text
-glue.lock
-```
-
-The lockfile should include:
-
-- Package identities.
-- Resolved versions.
-- Immutable revisions.
-- Content digests.
-- Resolved transitive dependencies.
-- Relevant manifest format versions.
-
-A lockfile should be deterministic for equivalent resolved dependency graphs.
-
-## 7.1. Resolution versus frozen builds
-
-Normal dependency resolution may select newer compatible versions when permitted by the declared constraints.
-
-A frozen resolution must instead use the existing lockfile and fail if the declarations cannot be satisfied by it.
-
-For example:
+Consumers control package acquisition behavior using resolution policies:
 
 ```bash
-glue deps resolve
-glue deps resolve --locked
+glue build --package-policy prefer-binary   # (Default) Binary first, fallback to source
+glue build --package-policy build-missing   # Force source build if binary is absent
+glue build --package-policy source-only     # Never download precompiled binaries
+glue build --package-policy binary-only     # Strict: fail if no precompiled variant matches
 ```
 
-The first command may update the lockfile. The second should verify the existing resolution without silently changing it.
+> [!CAUTION]
+> If a downloaded binary fails its cryptographic Content Digest check or has an ABI mismatch, Glue terminates with an integrity error. **It never silently falls back to source compilation on integrity failures**, as this could mask supply-chain tampering.
 
-## 7.2. What reproducibility means
+---
 
-Glue should distinguish dependency reproducibility from binary reproducibility.
+# 7. Package Production and Directory Topology
 
-A lockfile can reproduce the selected dependencies, but it cannot by itself guarantee byte-identical outputs.
-
-Binary reproducibility may also require:
-
-- A pinned compiler and linker.
-- Controlled environment variables.
-- Stable build paths.
-- Deterministic archive generation.
-- Explicit generated inputs.
-- Stable external tools.
-- Control over timestamps and other sources of nondeterminism.
-
-The architecture should make these conditions explicit rather than promising that every build is automatically bit-for-bit reproducible.
-
-# 8. Internal Project Model
-
-The project model is the semantic foundation of Glue.
-
-It should be independent of the configuration syntax and compiler-specific command formats.
-
-## 8.1. Core entities
-
-The initial internal model should include:
-
-**Project**
-
-Contains project identity, global configuration, target declarations and dependency requirements.
-
-**Package**
-
-Contains canonical package identity, source metadata, resolved revision and exported targets.
-
-**Target**
-
-Contains target type, sources, properties, dependencies and output requirements.
-
-**TargetPlatform**
-
-Contains the intended operating system, architecture, ABI and other platform-specific constraints.
-
-**Toolchain**
-
-Contains the selected compiler and related tools, capabilities, SDK requirements and environment.
-
-**BuildAction**
-
-Represents one operation, such as compiling a source file, generating code or linking an executable.
-
-**Artifact**
-
-Represents a produced or consumed file and its relevant compatibility properties.
-
-## 8.2. Semantic validation
-
-Before build planning, Glue should validate the project model.
-
-It should reject:
-
-- Duplicate target identities.
-- References to nonexistent targets.
-- Invalid target dependencies.
-- Incompatible property values.
-- Missing source files that are not generated.
-- Unsupported target combinations.
-- Invalid package exports.
-
-Where possible, errors should identify the source declaration responsible for the problem.
-
-## 8.3. Normalization
-
-Equivalent configurations should produce equivalent normalized models.
-
-Normalization should resolve aliases, canonicalize relevant paths, establish target identities and make default values explicit where necessary.
-
-This normalized model is the input to dependency resolution and target planning.
-
-# 9. Build Engine
-
-The build engine translates the resolved project model into an executable graph of build actions.
-
-## 9.1. Build graph
-
-A simple executable may produce the following graph:
+Glue establishes an explicit boundary between transient build intermediates, distributable package products, and the local engine cache.
 
 ```text
-main.c ------> main.o ----\
-                           \
-                            ---> app
-                           /
-math.c ------> math.o ----/
+my-project/
+├── gluefile                          # Project configuration root
+├── product/
+│   ├── build/                        # Local project build tree
+│   │   └── x86_64-linux-release/
+│   │       ├── obj/                  # Intermediate .o / .obj files
+│   │       └── bin/                  # Linked executables & local outputs
+│   │
+│   └── packages/                     # Relocatable, exported package products
+│       └── pinwhell/
+│           └── inih/
+│               └── 0.5.0/
+│                   ├── gluefile      # Package entry manifest (exported targets)
+│                   ├── metadata.json # Available variants index & signatures
+│                   └── variants/
+│                       ├── x86_64-linux-gnu-static/
+│                       │   ├── include/     # Relocatable public headers
+│                       │   │   └── ini.h
+│                       │   ├── lib/         # Relocatable libraries
+│                       │   │   └── libinih.a
+│                       │   └── variant.json # Variant compatibility specification
+│                       │
+│                       └── x86_64-windows-msvc-static/
+│                           ├── include/
+│                           │   └── ini.h
+│                           ├── lib/
+│                           │   └── inih.lib
+│                           └── variant.json
+│
+└── .glue/                            # Ephemeral engine scratch cache (safe to rm -rf)
+    ├── downloads/                    # Git bare checkouts and archives
+    ├── planner/                      # Cached action DAG state
+    └── fingerprints/                 # Action execution cache database
 ```
 
-Compilation actions can execute independently.
+## 7.1. The `glue package` Command
 
-Linking must wait until all required object files and libraries are available.
-
-## 9.2. BuildAction model
-
-Each action should contain:
-
-```text
-BuildAction:
-    id
-    operation
-    inputs
-    outputs
-    dependencies
-    toolchain
-    environment
-    fingerprint
-```
-
-The action ID identifies an operation within a build plan.
-
-The fingerprint identifies its effective inputs and configuration for incremental reuse.
-
-These concepts should remain distinct.
-
-## 9.3. Incremental compilation
-
-Glue should avoid rebuilding actions whose inputs and relevant configuration have not changed.
-
-The fingerprint should account for:
-
-- Source content.
-- Compiler identity and relevant version.
-- Effective compiler arguments.
-- Target properties.
-- Dependency artifacts.
-- Relevant environment inputs.
-- Toolchain configuration.
-- Generated inputs.
-
-File timestamps can be used as an optimization, but should not be the sole basis for determining whether an artifact is valid.
-
-## 9.4. Header dependency discovery
-
-C and C++ compilation requires correct tracking of transitive headers.
-
-Glue should use dependency-discovery mechanisms provided by the selected compiler when available.
-
-Discovered dependencies must be recorded and incorporated into subsequent invalidation decisions.
-
-If a compiler cannot provide reliable dependency information, Glue should require an explicit alternative mechanism or clearly documented limitations.
-
-## 9.5. Build scheduling
-
-The scheduler should execute actions only when their dependencies are satisfied.
-
-Independent actions should be eligible for parallel execution.
-
-The scheduler should support configurable concurrency and resource limits.
-
-A failed action should prevent dependent actions from proceeding, while unrelated work already in progress may finish safely.
-
-## 9.6. Generated sources
-
-Generated files should be first-class graph outputs.
-
-For example:
-
-```glue
-custom.add(protocol)
-    .input("schema.idl")
-    .output("generated/protocol.c")
-    .command("idl-compiler")
-```
-
-The exact syntax remains open.
-
-The engine must know the declared inputs, outputs and dependencies of the generator. Generated files should normally be written to the build directory, not the source tree.
-
-Undeclared side effects should not be assumed to participate correctly in incremental builds.
-
-## 9.7. Build backends
-
-The initial implementation should execute compiler and linker commands directly.
-
-For example:
-
-```text
-clang -c foo.c -o foo.o
-clang foo.o -o foo
-```
-
-The exact invocation depends on the selected toolchain and target.
-
-The internal project model should not depend on this particular execution strategy.
-
-Alternative backends or integrations with established build systems can be considered later if they provide meaningful benefits.
-
-# 10. Compiler and Toolchain Architecture
-
-Glue should represent compilers and toolchains through capability-oriented interfaces.
-
-The build engine describes the operation required. The toolchain adapter translates that operation into the appropriate native commands.
-
-## 10.1. Toolchain responsibilities
-
-A toolchain may define:
-
-- Compiler discovery.
-- Compiler identity and version.
-- Supported languages.
-- Supported targets.
-- Compile command generation.
-- Link command generation.
-- Static archive generation.
-- Dependency discovery.
-- SDK and sysroot requirements.
-- Runtime library selection.
-- Artifact inspection.
-
-Not every toolchain must support every capability.
-
-The system should query capabilities explicitly rather than assuming that every compiler supports the same operations.
-
-## 10.2. Initial toolchains
-
-The initial implementations should prioritize Clang and GCC, followed by MSVC.
-
-This provides a practical foundation for common Linux and Windows workflows while establishing the adapter architecture needed for additional compilers.
-
-The implementation order should be guided by the platforms and workflows the project intends to support first.
-
-## 10.3. Compile request
-
-A compiler adapter should receive structured input:
-
-```text
-CompileRequest:
-    source
-    output
-    language
-    target
-    optimization_profile
-    include_directories
-    definitions
-    compile_options
-    dependency_mode
-    environment
-```
-
-The adapter translates this request into the actual compiler invocation.
-
-The build engine should not construct command strings by concatenating arbitrary project values.
-
-## 10.4. Link request
-
-Linking should use a separate request model:
-
-```text
-LinkRequest:
-    output
-    target
-    object_files
-    static_libraries
-    shared_libraries
-    library_search_paths
-    link_options
-    runtime_requirements
-```
-
-This separation matters because compile and link options have different meanings and compatibility requirements.
-
-## 10.5. Custom compilers
-
-Glue should permit custom compiler integrations.
-
-A custom integration should declare:
-
-- The executable or tool invocation.
-- Supported input types.
-- Argument mapping.
-- Expected outputs.
-- Dependency-discovery behavior.
-- Relevant environment requirements.
-- Supported targets and capabilities.
-
-This permits integration with specialized compilers without requiring the core engine to understand their internal command-line semantics.
-
-## 10.6. Environment management
-
-Build actions should receive an explicitly defined environment.
-
-Relevant environment variables and tool paths must be available for fingerprinting where they affect outputs.
-
-Glue should support ordinary local builds first, while leaving room for more isolated or hermetic execution environments.
-
-A hermetic build may require filesystem restrictions, pinned tools and controlled external inputs. It should be an achievable mode rather than a mandatory prerequisite for every project.
-
-# 11. Cross-Compilation
-
-Cross-compilation should be a first-class capability.
-
-Glue must distinguish:
-
-**Host:** the system running the Glue process.
-
-**Build platform:** the environment in which build tools execute.
-
-**Target:** the environment for which the output artifacts are produced.
-
-These concepts can refer to different systems.
-
-## 11.1. Target representation
-
-A target description should represent relevant properties such as:
-
-```text
-TargetPlatform:
-    operating_system
-    architecture
-    abi
-    object_format
-    environment
-    minimum_os_version
-    api_level
-```
-
-Not every field applies to every platform.
-
-The architecture should permit platform-specific extensions without making every platform conform to an artificial universal set of mandatory fields.
-
-## 11.2. Target resolution
-
-Given a target request, Glue should:
-
-1. Resolve the requested platform.
-2. Select a compatible toolchain.
-3. Resolve the SDK and sysroot when required.
-4. Determine the compiler and linker configuration.
-5. Validate the required libraries.
-6. Construct the build plan.
-7. Verify the resulting artifacts.
-
-A target name is not sufficient to guarantee that a valid cross-compilation environment exists.
-
-Missing SDKs, incompatible libraries and unsupported compiler targets should produce explicit diagnostics.
-
-## 11.3. Build dependencies and target dependencies
-
-Cross-compilation requires a distinction between tools that execute on the build platform and artifacts intended for the target platform.
-
-A code generator may run on Linux while producing source code that will later be compiled for Android.
-
-Glue must model this distinction explicitly so that it does not attempt to execute target binaries on the host.
-
-# 12. ABI and Binary Compatibility
-
-Glue should represent ABI requirements explicitly rather than assuming that architecture alone determines compatibility.
-
-Relevant properties include:
-
-- CPU architecture.
-- Operating system.
-- Calling convention.
-- Object and executable format.
-- C and C++ ABI requirements.
-- Runtime library requirements.
-- Standard-library compatibility.
-- Platform API level.
-- Linkage and symbol requirements.
-- Architecture-specific features.
-
-## 12.1. Compatibility validation
-
-Before consuming a precompiled artifact, Glue should determine whether the artifact is compatible with the selected target.
-
-Compatibility may be established through declared metadata, artifact inspection and platform-specific rules.
-
-The system should distinguish known compatibility from unverified compatibility.
-
-It should not silently treat an unknown combination as valid.
-
-## 12.2. C, C++ and Rust interoperability
-
-C, C++ and Rust do not share a universal binary interface.
-
-The initial architecture should support C and C++ targets, with explicit language and ABI requirements.
-
-Rust should be added as a separate language integration.
-
-Where independently compiled Rust components interoperate with C or C++, Glue should support explicitly declared foreign-function interfaces and the relevant C ABI requirements.
-
-It should not assume that arbitrary Rust-native interfaces remain ABI-compatible across compiler versions.
-
-## 12.3. Diagnostics
-
-An ABI mismatch should produce a useful explanation.
-
-For example:
-
-```text
-Dependency: graphics::renderer
-
-Requested:
-  Platform: Android
-  Architecture: ARM64
-  ABI: arm64-v8a
-  API level: 26
-
-Available artifact:
-  Platform: Linux
-  Architecture: ARM64
-
-Result:
-  No compatible artifact found.
-```
-
-This is an illustrative diagnostic.
-
-The implementation should report the actual mismatched properties that it can establish.
-
-# 13. Android Integration
-
-Android is an important validation target for Glue's platform architecture.
-
-Native Android builds require coordination between the NDK, compiler, target ABI, API level, sysroot and platform libraries.
-
-Glue should integrate with the Android NDK instead of attempting to replace it.
-
-## 13.1. Target declaration
-
-A proposed interface is:
-
-```glue
-build.target.android()
-    .abi("arm64-v8a")
-    .api(26)
-```
-
-Alternatively, a convenience alias could be supported:
-
-```glue
-build.target("android-arm64")
-```
-
-The alias should resolve to a structured target configuration.
-
-## 13.2. NDK resolution
-
-The Android integration should determine:
-
-- NDK installation and version.
-- Compiler and linker paths.
-- Target triple.
-- ABI.
-- API level.
-- Sysroot.
-- Required system libraries.
-- Output artifact properties.
-
-Glue should use the NDK's supported configuration mechanisms as the authoritative source of platform-specific compiler settings.
-
-## 13.3. Multiple ABIs
-
-A single project should be able to produce separate artifacts for multiple Android ABIs.
-
-Examples include:
-
-```text
-arm64-v8a
-armeabi-v7a
-x86
-x86_64
-```
-
-Each target must use its own compatible compilation and linking configuration.
-
-Objects and libraries built for different ABIs must never be mixed in a single link operation.
-
-## 13.4. Native libraries and complete applications
-
-The initial Android integration should focus on producing native libraries and executables.
-
-APK generation, signing and complete Android application packaging should be treated as a separate integration or later extension.
-
-This boundary keeps the initial scope manageable while allowing Glue to participate in larger Android development workflows.
-
-# 14. Execution Model and CLI
-
-Glue should provide a consistent command-line interface.
-
-The proposed commands are:
+Producing a package is an explicit, verified operation:
 
 ```bash
-glue configure
-glue build
-glue run foo
-glue test
-glue clean
-glue install
-glue graph
-glue explain foo
+glue package
+# Or targeting a specific cross-compilation platform:
+glue package --target android-arm64
 ```
 
-## 14.1. Build
+### Packaging Pipeline Stages
+1. **Target Compilation:** Builds the exportable target under `CTX_PACKAGE_BUILD`.
+2. **Artifact Staging:** Copies declared public headers, compiled archives, and import libraries into an isolated staging root: `.glue/staging/<uuid>/`.
+3. **Relocatability Audit:** Scans all staged files to ensure no hardcoded producer paths exist in headers or generated metadata.
+4. **Digest Calculation:** Computes the canonical SHA-256 tree digest over the staged payload.
+5. **Atomic Commit:** Renames `.glue/staging/<uuid>/` to `product/packages/<ns>/<name>/<ver>/variants/<var-id>/`.
 
-`glue build` resolves the configured project and executes the actions needed to produce the selected targets.
+## 7.2. Producing Shared Library Packages (`shared_lib`)
 
-It should support target selection and build profiles.
+While static packages encapsulate object files into a single link-time archive, producing a **shared library package** (`shared_lib`) requires modeling a fundamental duality: the **Link-Time Interface** versus the **Runtime Deployment Payload**.
 
-## 14.2. Run
+Native operating systems treat shared libraries through distinct link-time and loader mechanisms:
 
-`glue run foo` identifies the executable target, builds it if necessary and launches the resulting artifact.
+| Platform | Link-Time Interface (`lib/`) | Runtime Payload (`bin/` or `runtime/`) | Loader Discovery Mechanism |
+|---|---|---|---|
+| **Windows (PE/COFF)** | Import Library (`.lib` with `.idata` records) | Dynamic Link Library (`.dll`) | Executable directory, `PATH`, Windows System directories |
+| **Linux (ELF)** | Shared Object (`.so` symlink or binary) | Versioned Shared Object (`.so.<version>`) | `DT_RUNPATH` / `DT_RPATH` with `$ORIGIN`, `LD_LIBRARY_PATH` |
+| **macOS (Mach-O)** | Dynamic Library (`.dylib` symlink or binary) | Versioned Dynamic Library (`.<version>.dylib`) | `@rpath`, `@executable_path`, `@loader_path` |
+| **Android (ELF/NDK)** | Shared Object (`.so`) | ABI-partitioned Shared Object (`.so`) | `System.loadLibrary()`, APK `lib/<abi>/` extraction |
 
-Program arguments should be passed without reinterpretation after the command separator:
+### 7.2.1. Shared Package Variant Topology
 
-```bash
-glue run foo -- --input data.txt
-```
-
-Glue should forward program output and return the program's exit status.
-
-If the target cannot execute on the host, Glue should require an explicitly configured runner or emulator rather than assuming execution is possible.
-
-## 14.3. Test
-
-The initial test system should support executable-based tests.
-
-Later versions can introduce richer discovery, structured results, test filtering and parallel test execution.
-
-## 14.4. Clean
-
-`glue clean` should remove generated build artifacts without deleting source files or downloaded dependencies by default.
-
-## 14.5. Install
-
-`glue install` should install supported artifacts into a declared destination.
-
-Host artifacts and target artifacts must remain distinguishable.
-
-A cross-compiled executable should not automatically be treated as a runnable host program.
-
-## 14.6. Graph and explain
-
-`glue graph` should display the relevant target or build-action graph.
-
-`glue explain foo` should show the resolved configuration of a target, including dependencies, sources, compiler selection, target platform and output path.
-
-These commands are especially useful when automatic resolution becomes complex.
-
-# 15. Build Profiles
-
-Glue should provide a small set of standard profiles.
-
-**Debug:** suitable debugging information and development-friendly compilation settings.
-
-**Release:** appropriate optimization and linking settings for the selected toolchain.
-
-**Custom:** user-defined configurations.
-
-Profiles should describe intent rather than hardcode compiler-specific flags into the core engine.
-
-The selected toolchain translates a profile into concrete compiler and linker options.
-
-Targets should also support configuration-specific properties without requiring duplicated target declarations.
-
-# 16. Artifact Storage and Caching
-
-Glue should distinguish dependency storage from build artifacts.
-
-## 16.1. Dependency cache
-
-Stores downloaded source packages and verified dependency contents.
-
-## 16.2. Local build cache
-
-Stores objects, generated files, executables, libraries and relevant build metadata.
-
-## 16.3. Shared artifact cache
-
-A future optional component may allow compatible build outputs to be reused across machines and CI environments.
-
-Shared-cache keys must account for all relevant build inputs and toolchain properties.
-
-Cache entries should be verified before use.
-
-A shared cache must not allow artifacts to be reused merely because they have the same target name or output filename.
-
-## 16.4. Cache correctness
-
-The cache is an optimization, not the source of truth.
-
-Glue should be able to invalidate cached outputs when an input changes and rebuild them from the declared graph.
-
-Where an action depends on undeclared external state, the system must either model that state explicitly or document the limitations of caching the action.
-
-# 17. Security Model
-
-Glue will acquire external code and execute compilers, generators and custom build commands.
-
-These operations must be treated as potentially unsafe.
-
-## 17.1. Dependency integrity
-
-Remote packages should be resolved to immutable revisions.
-
-Downloaded contents should be checked against recorded integrity digests.
-
-## 17.2. Build execution
-
-Custom commands and project configuration can execute code. Glue should make such execution visible and provide clear diagnostics.
-
-A lockfile establishes a reproducible dependency resolution; it does not establish that the dependencies are trustworthy.
-
-## 17.3. Sandboxing
-
-The architecture should permit future sandboxed build actions with controlled filesystem, environment and network access.
-
-Sandboxing should be introduced through an explicit execution policy rather than assumed to exist in the initial implementation.
-
-## 17.4. Credentials
-
-Private repository credentials should be obtained through appropriate credential mechanisms and should not be embedded in lockfiles or logged command output.
-
-## 17.5. Supply-chain verification
-
-Package signatures, trusted registries, provenance metadata and policy enforcement may be added independently.
-
-They should complement content integrity checks rather than be confused with them.
-
-# 18. Diagnostics and Observability
-
-Glue should report errors in terms of targets, packages and actions.
-
-A useful error identifies:
-
-- The affected target.
-- The failed operation.
-- The source or artifact involved.
-- The selected toolchain.
-- The relevant compiler output.
-- A possible resolution when one can be established.
-
-The complete native command and its output should remain accessible.
-
-Glue should also provide a way to inspect resolved configuration and explain why a dependency, toolchain or artifact was selected.
-
-This visibility is important because native builds frequently fail due to environmental or platform-specific requirements that cannot be hidden behind a generic error message.
-
-# 19. Testing Strategy
-
-Glue's architecture must be validated through automated tests.
-
-## 19.1. Frontend tests
-
-Test parsing, invalid syntax, duplicate declarations, invalid references and equivalent configurations.
-
-## 19.2. Resolver tests
-
-Test version constraints, transitive dependencies, conflicting requirements, immutable revisions and lockfile consistency.
-
-## 19.3. Build graph tests
-
-Test dependency ordering, parallel execution eligibility, cycle detection and invalidation after changes to inputs.
-
-## 19.4. Toolchain tests
-
-Test command generation, compiler failures, missing tools, dependency discovery and output validation.
-
-## 19.5. Platform tests
-
-Test target selection, toolchain compatibility, sysroot resolution and ABI validation.
-
-## 19.6. End-to-end tests
-
-Test complete projects that build, run, consume libraries and reproduce dependency resolution.
-
-Android integration should include tests using a real supported NDK installation.
-
-## 19.7. Regression tests
-
-Every correctness bug in dependency tracking, cache invalidation or target resolution should result in a regression test.
-
-Incremental build correctness is especially important because incorrect reuse can produce apparently successful but stale binaries.
-
-# 20. Repository Architecture
-
-A possible initial repository structure is:
+A packaged shared library variant under `product/packages/<namespace>/<name>/<version>/variants/<variant-id>/` is organized into distinct functional directories:
 
 ```text
-glue/
-├── cli/
-├── frontend/
-│   ├── lexer/
-│   ├── parser/
-│   ├── ast/
-│   ├── validation/
-│   └── ir/
-├── project/
-├── packages/
-│   ├── resolver/
-│   ├── sources/
-│   ├── manifests/
-│   ├── lockfile/
-│   └── cache/
-├── targets/
-├── toolchains/
-│   ├── clang/
-│   ├── gcc/
-│   └── msvc/
-├── build/
-│   ├── graph/
-│   ├── planner/
-│   ├── scheduler/
-│   └── executor/
-├── artifacts/
-├── platforms/
-│   └── android/
-└── tests/
+product/packages/acme/crypto/1.2.0/variants/x86_64-windows-msvc-shared/
+├── gluefile              # Exported target declaration with linkage and runtime bindings
+├── package.toml          # Variant compatibility, ABI contract, and payload descriptors
+├── content.sha256        # Detached SHA-256 tree digest covering all payload files
+├── include/              # Relocatable public headers
+│   └── crypto.h
+├── lib/                  # Link-Time Interface
+│   └── crypto.lib        # PE Import Library (not a static archive)
+└── bin/                  # Runtime Deployment Payload
+    └── crypto.dll        # Dynamic Link Library loaded by OS PE loader
 ```
 
-This is a logical organization, not a requirement to create a separate package for every directory immediately.
-
-The implementation should begin with a small number of modules and split them when their interfaces become stable.
-
-# 21. Implementation Roadmap
-
-The implementation should proceed in stages, with each stage producing a usable system.
-
-## Stage 1 — Minimal build engine
-
-Implement:
-
-- Configuration parsing.
-- Project and target models.
-- C and C++ executable targets.
-- Local compiler discovery.
-- Basic compilation and linking.
-- `build`, `run` and `clean`.
-- Action dependency tracking.
-
-**Exit criterion:** a small C project builds and runs through Glue.
-
-## Stage 2 — Correct incremental builds
-
-Implement:
-
-- Build graph planning.
-- Source and header dependency discovery.
-- Action fingerprints.
-- Output validation.
-- Reliable invalidation.
-- Parallel scheduling.
-
-**Exit criterion:** unchanged builds reuse valid outputs, while relevant changes trigger the required rebuilds.
-
-## Stage 3 — Libraries and target properties
-
-Implement:
-
-- Static and shared libraries.
-- Object and interface targets where needed.
-- Public and private requirements.
-- Dependency propagation.
-- Target validation.
-
-**Exit criterion:** reusable libraries can be consumed by multiple executables without duplicated build configuration.
-
-## Stage 4 — Package management
-
-Implement:
-
-- Local package imports.
-- Git and GitHub providers.
-- Package identity.
-- Namespaces and aliases.
-- Version resolution.
-- Transitive dependencies.
-- Lockfile generation and frozen resolution.
-- Dependency caching.
-
-**Exit criterion:** a project can reproduce its resolved dependency graph from a committed lockfile.
-
-## Stage 5 — Toolchain and target abstraction
-
-Implement:
-
-- Structured target descriptions.
-- Compiler capability discovery.
-- Explicit toolchain selection.
-- Custom compiler integrations.
-- Sysroot support.
-- Host/build/target separation.
-- Artifact compatibility validation.
-
-**Exit criterion:** the same project model can produce artifacts for multiple supported targets without duplicating the project definition.
-
-## Stage 6 — Android integration
-
-Implement:
-
-- NDK discovery and selection.
-- ABI and API-level configuration.
-- Target-specific compiler and linker settings.
-- Multi-ABI builds.
-- Native library outputs.
-- Actionable compatibility diagnostics.
-
-**Exit criterion:** Glue builds and validates a native Android library against a supported NDK configuration.
-
-## Stage 7 — Advanced capabilities
-
-Introduce:
-
-- Custom generators.
-- Installation and packaging.
-- Test orchestration.
-- Shared artifact caching.
-- Build graph inspection.
-- Stronger execution isolation.
-- Expanded platform integrations.
-
-## Stage 8 — Rust integration
-
-Introduce Rust as a distinct language integration.
-
-The implementation must account for Cargo and Rust build conventions, generated code, build scripts, target compatibility and explicit interoperability requirements.
-
-Rust should not be forced into a C/C++ compilation model when its own build semantics require different treatment.
-
-# 22. Initial Acceptance Criteria
-
-The first public implementation should satisfy measurable requirements.
-
-**Basic project:** a single C source file can be compiled and executed using `glue run`.
-
-**Incremental build:** repeating an unchanged build does not recompile unaffected sources.
-
-**Dependency tracking:** changing a relevant header invalidates dependent compilation actions.
-
-**Library support:** an executable can link a library defined in the same project.
-
-**Package resolution:** a project can import a local dependency and consume its exported target.
-
-**Remote packages:** a dependency can be resolved to an immutable revision and verified through the lockfile.
-
-**Namespaces:** different package identities can expose similarly named targets without ambiguity in the project model.
-
-**Toolchain selection:** a project can explicitly select a supported compiler.
-
-**Cross-compilation:** a supported toolchain can generate artifacts for a target different from the host, with target requirements visible in the resolved configuration.
-
-**Android:** a configured target can resolve a supported NDK and produce a native library for the requested ABI and API level.
-
-**Diagnostics:** missing tools, incompatible artifacts and failed actions produce actionable errors.
-
-These criteria define progress without requiring every planned capability to exist in the first release.
-
-# 23. Open Design Decisions
-
-Some choices should remain provisional until the implementation provides enough evidence to evaluate them.
-
-## 23.1. Configuration language
-
-The exact grammar, error-recovery behavior, multiline syntax and extension mechanisms require a dedicated language specification.
-
-The architectural requirement is that configuration parsing remains separate from build execution.
-
-## 23.2. Manifest and lockfile formats
-
-TOML is a reasonable starting point, but the final schemas must be versioned and tested before becoming stable public interfaces.
-
-## 23.3. Multiple versions of a package
-
-Glue must decide whether incompatible versions of the same package identity may coexist in one dependency graph.
-
-This decision affects namespace design, artifact isolation, ABI validation and transitive dependency resolution.
-
-## 23.4. Build backend
-
-Direct command execution is the recommended initial approach.
-
-Alternative backends should be evaluated only when they provide meaningful advantages without compromising the project model or build correctness.
-
-## 23.5. Binary package format
-
-Binary distribution requires explicit compatibility metadata, integrity verification and a clear relationship between package versions and target-specific artifacts.
-
-This should follow the stabilization of the target and toolchain models.
-
-## 23.6. Rust integration
-
-Rust should remain an extension until the core language and target abstractions have been validated with real C/C++ projects.
-
-## 23.7. Sandbox and shared cache
-
-Both capabilities should be designed around the action model but need not be part of the initial release.
-
-# 24. Architectural Invariants
-
-The following rules should remain stable across implementations.
-
-1. Parsing a project does not implicitly compile it.
-2. Every build action has declared inputs, outputs and dependencies.
-3. Package identity is distinct from package display name.
-4. Package dependencies are distinct from build-action dependencies.
-5. Host, build and target platforms are distinct concepts.
-6. Compiler-specific behavior belongs in toolchain integrations.
-7. Artifacts are reused only when their relevant inputs and configuration remain valid.
-8. Target compatibility cannot be inferred from CPU architecture alone.
-9. Dependency lockfiles record exact resolution rather than only version constraints.
-10. Native command output remains accessible even when Glue provides higher-level diagnostics.
-11. Generated outputs are represented in the build graph.
-12. Advanced platform support extends the project model rather than bypassing it.
-
-These invariants are more important than any particular syntax choice because they determine whether Glue can evolve without accumulating architectural contradictions.
-
-# 25. Reference Workflow
-
-Consider a project with an executable and a reusable library.
-
-Its configuration might be:
-
-```glue
-static_lib.add(core)
-    .sources("src/core.c")
-    .include.public("include")
-
-exec.add(app)
-    .sources("src/main.c")
-    .depends(core)
-```
-
-A developer runs:
-
-```bash
-glue build
-```
-
-Glue parses the project and creates its normalized model.
-
-It validates the target declarations and their references.
-
-It resolves external dependencies if any are declared.
-
-It selects a compatible compiler and target configuration.
-
-It creates a build graph containing compilation actions for the source files and the actions required to produce the library and executable.
-
-It calculates action fingerprints and identifies which outputs can be reused.
-
-The scheduler executes the remaining actions, respecting dependencies and available concurrency.
-
-The artifact store records validated outputs.
-
-The developer then runs:
-
-```bash
-glue run app
-```
-
-Glue identifies the executable target, ensures its build is current, launches the artifact and returns the program's exit status.
-
-The same project model can later be extended with a different compiler, target platform or external package without changing the fundamental workflow.
-
-# 26. Minimal End-to-End Prototype
-
-The first prototype should be deliberately small.
-
-Project structure:
+For ELF platforms (Linux), the topology unifies or symlinks the link interface to the versioned runtime artifact while establishing an embedded `SONAME`:
 
 ```text
-hello/
+product/packages/acme/crypto/1.2.0/variants/x86_64-linux-gnu-shared/
 ├── gluefile
-└── hello.c
+├── package.toml
+├── content.sha256
+├── include/
+│   └── crypto.h
+├── lib/                  # Link-time interface (linker input)
+│   ├── libcrypto.so -> libcrypto.so.1.2.0
+│   └── libcrypto.so.1 -> libcrypto.so.1.2.0
+└── runtime/              # Relocatable runtime payload
+    └── libcrypto.so.1.2.0 # Contains DT_SONAME = "libcrypto.so.1"
 ```
 
-`gluefile`:
+### 7.2.2. The Shared Packaging Pipeline (`glue package`)
 
-```glue
-exec.add(hello).sources("hello.c")
+When `glue package` is executed against a `shared_lib` target:
+
+1. **Compilation with Position-Independence:** All object files are compiled with Position-Independent Code flags (`-fPIC` on Linux/macOS; Windows COFF code by default).
+2. **Symbol Visibility & Export Strategy:**
+   - On Windows: The compiler and linker are instructed to emit both the dynamic library (`.dll`) and the import library (`.lib`). The package recipe or source code declares exported symbols via platform macros (e.g., `__declspec(dllexport)` on Windows or `__attribute__((visibility("default")))` on GCC/Clang).
+   - On Linux/macOS: Hidden visibility by default (`-fvisibility=hidden`) is encouraged, and the linker sets the immutable soname (`-Wl,-soname,lib<name>.so.<major>`).
+3. **Partitioned Staging:**
+   - Public headers are staged to `include/`.
+   - Linker inputs (import libraries `.lib`, or linker symlinks `.so`) are staged to `lib/`.
+   - Dynamic binaries (`.dll`, `.so.<ver>`, `.dylib`) are staged to `bin/` (Windows) or `runtime/` (Unix).
+4. **Relocatability and Path Auditing:**
+   - Scans that the shared library does not hardcode producer build paths in `DT_RPATH` / `DT_RUNPATH`.
+   - On macOS, ensures install names use `@rpath/lib<name>.dylib`.
+5. **Variant Gluefile Generation:**
+   Emits a variant-level `gluefile` that explicitly binds both the link-time artifact and the runtime deployment payload:
+   ```glue
+   namespace acme;
+
+   shared_lib.add(crypto)
+       .prebuilt("lib/crypto.lib")
+       .runtime("bin/crypto.dll")
+       .include.public("include")
+   ```
+6. **Canonical Digest Calculation:**
+   The cryptographic Content Digest is computed across the entire staged variant tree (headers, import libraries, runtime payloads, and manifest metadata).
+
+### 7.2.3. The Automatic Runtime Deployment Closure
+
+A central failure of native C/C++ dependency management is the "DLL Hell" or missing shared library problem at runtime: a project compiles and links successfully, but crashes upon execution because the dynamic loader cannot find the shared library.
+
+Glue eliminates this failure through **Automatic Runtime Deployment**:
+
+```mermaid
+flowchart TD
+    Consumer[Consumer: exec.add app] -->|Link Dependency| SharedPkg[Imported Shared Package: acme::crypto]
+    SharedPkg -->|Link-Time Requirement| Linker[Linker Command: pass lib/crypto.lib]
+    Linker --> LinkedBinary[Output: product/build/arch-os/bin/app.exe]
+    
+    SharedPkg -->|Runtime Payload: bin/crypto.dll| DeployClosure[Runtime Deployment Engine]
+    DeployClosure -->|Automatic Stage/Copy| AppDir[product/build/arch-os/bin/crypto.dll]
+    
+    LinkedBinary --> Run[glue run app]
+    AppDir --> Run
+    Run --> Success[Application Executes Successfully with Zero Missing DLL Errors]
 ```
 
-`hello.c`:
+1. **Link Step:** The build planner supplies the link-time artifact (`lib/crypto.lib` or `lib/libcrypto.so`) to the link action of the consuming target.
+2. **Deployment Step:** The build executor traverses the target's transitive dependency closure. For every resolved `shared_lib`, Glue automatically stages the declared `runtime` payloads directly into the consumer's executable directory (`product/build/<build-key>/bin/` on Windows) or establishes relocatable runtime search paths (`-Wl,-rpath,'$ORIGIN/../lib'` on ELF, `@loader_path` on Mach-O).
+3. **Seamless Execution (`glue run`):** When `glue run` launches the binary, the dynamic loader finds all transitive shared dependencies immediately in the local execution context without modifying system directories or environment variables.
 
-```c
-#include <stdio.h>
+---
 
-int main(void) {
-    puts("Hello from Glue");
-    return 0;
+# 8. Dependency Lockfile and Reproducibility (`glue.lock`)
+
+Deterministic builds require locking all inputs. Glue generates and honors a comprehensive, machine-readable lockfile (`glue.lock`):
+
+```toml
+# Glue Dependency Lockfile — Canonical Format v1
+version = 1
+
+[[package]]
+coordinate = "github@pinwhell/inih@0.5.0"
+source_revision = "7a8b3f4c2e1d0a9b8c7d6e5f4a3b2c1d0e9f8a7b"
+resolved_variant = "x86_64-linux-gnu-opt-static"
+variant_id = "var_a91f3c88b02e"
+content_digest = "sha256:7b9260c6d59e35d259c735d46c646b9a9b7f5f2e8f192b0e6c5a3d7b8e1f0a2d"
+delivery_mode = "binary_download" # or "source_built"
+
+[package.effective_options]
+linkage = "static"
+optimization = "speed"
+crt = "glibc-2.31"
+```
+
+### Frozen Builds (`--locked`)
+In CI/CD pipelines, builds must be strictly verified against the lockfile:
+```bash
+glue build --locked
+```
+If `gluefile` contains dependencies or constraints that deviate from `glue.lock`, the build halts immediately with a clear diagnostic instead of silently updating the lockfile.
+
+---
+
+# 9. Build Engine and Incremental Graph Execution
+
+Glue represents all operations as a Directed Acyclic Graph (DAG) of atomic `BuildAction` nodes.
+
+## 9.1. The `BuildAction` Model
+
+Each node in the build graph is fully described by an immutable data structure:
+
+```rust
+pub struct BuildAction {
+    pub id: ActionId,
+    pub operation: OperationKind, // CompileC, CompileCpp, Archive, LinkExec, Custom
+    pub inputs: Vec<PathBuf>,
+    pub outputs: Vec<PathBuf>,
+    pub dependencies: Vec<ActionId>,
+    pub toolchain: ToolchainRef,
+    pub working_dir: PathBuf,
+    pub environment: BTreeMap<String, String>,
+    pub effective_flags: Vec<String>,
 }
 ```
 
-The required command is:
+## 9.2. Content Fingerprinting & Invalidation
 
-```bash
-glue run hello
+Glue avoids rebuilding unchanged targets by calculating an invariant action fingerprint:
+
+$$\text{Fingerprint} = \text{SHA256}\Big(\sum H(\text{Input File Contents}) \parallel H(\text{Compiler Binary \& Version}) \parallel \sum \text{Flags} \parallel \sum \text{Environment Vars}\Big)$$
+
+- **Source File Hashing:** Uses fast Blake3 or SHA-256 hashing of file contents. File modification timestamps (`mtime`) serve purely as an early filter; if `mtime` changed but contents are identical, no recompilation occurs.
+- **Dynamic Header Dependency Tracking:**
+  - For Clang and GCC, Glue injects `-MMD -MF <depfile>` flags to capture included headers (`.h`).
+  - For MSVC, Glue parses `/showIncludes` output from compiler stdout.
+  - All discovered header paths are added to the action's dynamic input set for subsequent fingerprint evaluations.
+
+## 9.3. Parallel Concurrency Control
+
+The build scheduler maintains a topological sort of the action DAG:
+- Actions with satisfied dependencies enter the ready queue.
+- Concurrency defaults to the host machine's logical CPU count ($N$).
+- High-memory operations (such as final whole-program LTO linking) can be assigned resource weights to prevent out-of-memory thrashing.
+
+---
+
+# 10. Toolchain and Compiler Architecture
+
+Glue interacts with native compilers via clean, capability-driven toolchain adapters:
+
+```mermaid
+flowchart LR
+    Engine[Glue Build Planner] -->|CompileRequest| Adapter[Toolchain Adapter]
+    Adapter -->|Translates to CLI| Compiler[Native Compiler CLI]
+    Compiler -->|Clang| ClangBin[clang / clang++]
+    Compiler -->|GCC| GccBin[gcc / g++]
+    Compiler -->|MSVC| MsvcBin[cl.exe / link.exe]
 ```
 
-Expected output:
+## 10.1. Structured Request Interfaces
+
+The build engine never formats raw shell command strings directly. It dispatches structured requests:
+
+### `CompileRequest`
+- `source_file`: Path to the source file.
+- `output_file`: Target object file (`.o` / `.obj`).
+- `language`: `C89`, `C99`, `C11`, `C17`, `Cxx11`, `Cxx14`, `Cxx17`, `Cxx20`, `Cxx23`.
+- `include_paths`: List of public, private, and system search directories.
+- `defines`: Key-value pairs for preprocessor definitions.
+- `optimization`: `Debug`, `ReleaseFast`, `ReleaseSmall`, `ReleaseSafe`.
+- `pic_mode`: Boolean indicating Position Independent Code requirements.
+
+### `LinkRequest`
+- `output_file`: Final binary path (`app`, `libcore.a`, `libcore.so`, `core.dll`).
+- `link_kind`: `Executable`, `StaticArchive`, `SharedLibrary`.
+- `object_files`: Relocatable object files produced by compile actions.
+- `libraries`: Static archives, import libraries, and system library references.
+- `rpaths`: Runtime library search paths for ELF / Mach-O loaders.
+
+---
+
+# 11. Cross-Compilation and Android NDK Integration
+
+Cross-compilation is an intrinsic capability of Glue's architecture, not an afterthought.
+
+## 11.1. Tri-Platform Model
+Glue explicitly tracks three distinct machine platforms during every build:
+1. **Host Platform:** The machine executing the `glue` process.
+2. **Build Platform:** The environment executing build tools and code generators.
+3. **Target Platform:** The architecture and OS where the compiled binaries will run.
+
+```glue
+// Defining an Android Target
+build.target.android()
+    .abi("arm64-v8a")
+    .api(28)
+```
+
+## 11.2. Android NDK Architecture
+
+When targeting Android, Glue coordinates with the installed Android NDK:
+- **Automatic NDK Discovery:** Resolves NDK locations from `ANDROID_NDK_HOME`, `ANDROID_HOME`, or standard SDK directories.
+- **Clang Target Triples:** Automatically passes appropriate target triples:
+  - `arm64-v8a` $\rightarrow$ `aarch64-linux-android28`
+  - `armeabi-v7a` $\rightarrow$ `armv7a-linux-androideabi28`
+  - `x86_64` $\rightarrow$ `x86_64-linux-android28`
+- **Sysroot & STL:** Injects the NDK unified sysroot and links against the NDK's `libc++_shared.so` or `libc++_static.a` without manual user intervention.
+
+---
+
+# 12. Command-Line Interface (CLI) Specification
+
+Glue provides an intuitive, high-performance command-line interface:
+
+| Command | Syntax | Primary Function |
+|---|---|---|
+| `build` | `glue build [target] [--profile] [--locked]` | Resolves the project model and executes the build action DAG. |
+| `run` | `glue run <target> [-- <args>...]` | Builds the executable target (if stale) and launches the binary. |
+| `package`| `glue package [target] [--target <triple>]` | Compiles and stages relocatable package products in `product/packages/`. |
+| `test` | `glue test [target]` | Executes all test targets and reports structured status results. |
+| `clean` | `glue clean [--all]` | Cleans `product/build/`. Does not destroy `product/packages/` unless `--all` is set. |
+| `explain`| `glue explain <target>` | Explains why a target, variant, toolchain, or rebuild action was chosen. |
+| `graph` | `glue graph [--format dot\|svg\|json]` | Exports the dependency graph or action DAG for visual analysis. |
+
+---
+
+# 13. Comprehensive Architectural Invariants
+
+Every subsystem in Glue must strictly satisfy the following twenty architectural invariants:
+
+1. **Pure Configuration Parsing:** Parsing a `gluefile` produces a normalized semantic AST without invoking compilers or triggering build side-effects.
+2. **Explicit Action Contracts:** Every `BuildAction` in the DAG declares all inputs, outputs, flags, and dependencies explicitly.
+3. **Tripartite Identity Decoupling:** Package Coordinates, Variant IDs, and Content Digests are independent representations and must never be conflated.
+4. **Distinct Package and Action Graphs:** The high-level package/target graph is distinct from the low-level build action DAG.
+5. **Tri-Platform Separation:** Host, build, and target platforms are separate architectural concepts.
+6. **Encapsulated Toolchains:** All compiler-specific command-line arguments reside inside toolchain adapters.
+7. **Strict Fingerprint Invalidation:** An artifact is reused if and only if its input content fingerprint matches the cached record exactly.
+8. **No Architectural Guesses:** Target compatibility cannot be inferred from CPU architecture alone; OS, ABI, and runtime baselines must match.
+9. **Lockfile Primacy:** `glue.lock` records exact resolved revisions, variant IDs, and digests.
+10. **Unfiltered Native Diagnostics:** When a compiler or linker fails, its complete, unadulterated output remains accessible to the developer.
+11. **Explicit Synthetic Sources:** All generated sources must be declared as outputs of upstream actions within the DAG.
+12. **Native Extension Preservation:** Advanced platforms (e.g., Android NDK) extend the core target model rather than bypassing it.
+13. **Verified Binary Compatibility:** Published binary variants are selected only upon exact compatibility match; fallback to source requires pinned revisions and target-capable toolchains.
+14. **No Static Linkage Magic:** Static archives (`.a`, `.lib`) do not eliminate ABI, CRT, or OS version constraints.
+15. **Runtime Deployment Separation:** Dynamic runtime deployment requirements (`.dll`, `.so` RPATHs) are modeled separately from link-time inputs.
+16. **Explicit Packaging Action:** Distributable package creation occurs exclusively via `glue package`; build intermediates and packages are isolated.
+17. **Relocatability of Packages:** Exported package products are strictly self-contained and must never embed producer checkout absolute paths.
+18. **Constrained Declarative Dispatch:** `when imported` is a top-level declarative routing construct; it does not introduce general imperative evaluation.
+19. **Fail-Stop Integrity Policy:** A cryptographic digest mismatch or corrupted archive is an unrecoverable integrity error and never triggers silent fallback.
+20. **Reversible Storage Cleanup:** Cleaning intermediate build products (`glue clean`) must never delete completed, published package products in `product/packages/`.
+
+---
+
+# 14. Reference Walkthroughs
+
+## 14.1. Packaging a Library (`inih`)
+
+A library author packages `inih` for consumption across the native ecosystem:
 
 ```text
-Hello from Glue
+inih/
+├── gluefile
+├── ini.c
+└── ini.h
 ```
 
-The prototype should also verify:
+`gluefile`:
+```glue
+when imported {
+    return package()
+}
 
-- Missing compiler detection.
-- Compiler error reporting.
-- Correct exit-code propagation.
-- Reuse of unchanged outputs.
-- Rebuilding after a source change.
-- Separation of source files and generated outputs.
-- Target-specific artifact directories.
+static_lib.add(inih)
+    .sources("ini.c")
+    .include.public(".")
+```
 
-Once this works reliably, the project has a foundation on which to build the package and platform systems.
+The author executes:
+```bash
+glue package
+```
 
-# 27. Conclusion
+Glue compiles `ini.c`, captures `ini.h` and the resulting `libinih.a` (or `inih.lib`), computes the Variant ID and Content Digest, and produces the relocatable export manifest:
 
-Glue's long-term value lies in unifying native development workflows without pretending that compilers, operating systems and binary interfaces are interchangeable.
+```text
+product/packages/pinwhell/inih/0.5.0/
+├── gluefile
+├── metadata.json
+└── variants/
+    └── x86_64-linux-gnu-static/
+        ├── include/
+        │   └── ini.h
+        ├── lib/
+        │   └── libinih.a
+        └── variant.json
+```
 
-Its core should provide one project model, one dependency model and one build-action model, while preserving the differences between languages, compilers and platforms.
+## 14.2. Consuming the Package
 
-The initial implementation should focus on correct C/C++ compilation, incremental builds, library targets and direct execution. Package management should follow on top of a stable target model. Cross-compilation, custom toolchains, Android and Rust should extend that foundation through explicit interfaces.
+A client application consumes `inih` seamlessly:
 
-The architecture should make advanced native development easier to configure, inspect and reproduce without requiring Glue to replace the underlying native ecosystem.
+```glue
+import inih from github@pinwhell/inih version "^0.5.0"
 
-**The guiding principle is to unify the workflow, not erase the underlying complexity.**
+exec.add(my_app)
+    .sources("src/*.c")
+    .depends(inih)
+```
+
+The developer executes:
+```bash
+glue run my_app
+```
+
+1. Glue parses the application's `gluefile`.
+2. The resolver detects the import of `github@pinwhell/inih`.
+3. In imported context, the dependency's `when imported` block routes to the precompiled package entry.
+4. Glue matches the active platform (`x86_64-linux-gnu-static`), verifies the payload digest, and links `libinih.a` into `my_app`.
+5. If the consumer was building on an architecture without a precompiled binary (e.g., `riscv64`), Glue enters `CTX_PACKAGE_BUILD`, downloads the pinned source, compiles `libinih.a` using the target toolchain, stores the new variant, and links the application.
+
+## 14.3. Packaging and Consuming a Shared Library (`fastmath`)
+
+This walkthrough illustrates the complete lifecycle of a shared library package with automatic dynamic loader deployment.
+
+### 1. Producer Project (`fastmath`)
+`here.glue`:
+```glue
+when imported {
+    return package()
+}
+
+namespace math;
+
+shared_lib.add(fastmath)
+    .sources("src/fastmath.c")
+    .include.public("include")
+    .define("FASTMATH_EXPORTS")
+```
+
+The author executes:
+```bash
+glue package math::fastmath --version 2.0.0
+```
+
+Glue compiles `src/fastmath.c` with position-independent code and DLL export macros, links both the dynamic library and import library, and stages them:
+
+```text
+product/packages/math/fastmath/2.0.0/
+├── gluefile
+├── metadata.json
+└── variants/
+    └── x86_64-windows-msvc-shared/
+        ├── gluefile
+        ├── package.toml
+        ├── content.sha256
+        ├── include/
+        │   └── fastmath.h
+        ├── lib/
+        │   └── fastmath.lib    # Import library for link-time symbol resolution
+        └── bin/
+            └── fastmath.dll    # Dynamic runtime payload
+```
+
+The variant `gluefile` declares:
+```glue
+namespace math;
+
+shared_lib.add(fastmath)
+    .prebuilt("lib/fastmath.lib")
+    .runtime("bin/fastmath.dll")
+    .include.public("include")
+```
+
+### 2. Consumer Project (`simulation`)
+`here.glue`:
+```glue
+import fastmath from "../math-producer"
+
+namespace app;
+
+exec.add(sim)
+    .sources("src/main.c")
+    .depends(fastmath::fastmath)
+```
+
+The developer executes:
+```bash
+glue run sim
+```
+
+Glue orchestrates the link and runtime deployment seamlessly:
+1. **Resolution:** Resolves `fastmath::fastmath` to the precompiled shared variant.
+2. **Link Stage:** Passes `lib/fastmath.lib` (or `lib/libfastmath.so`) to the linker to satisfy unresolved symbols.
+3. **Deployment Stage:** Automatically copies `bin/fastmath.dll` into `product/build/x86_64-windows/bin/` alongside `sim.exe`.
+4. **Execution:** Launches `sim.exe`. The Windows dynamic loader finds `fastmath.dll` immediately in the executable's directory, executing with zero DLL-not-found errors.
+
+---
+
+# 15. Conclusion
+
+Glue eliminates the historical friction of native systems engineering by establishing a unified, declarative, and robust architecture. By treating precompiled binaries and source code as complementary facets of the same package product, Glue provides developers with the instant gratification of modern package ecosystems without compromising the absolute determinism, performance, and control demanded by native C and C++ software.

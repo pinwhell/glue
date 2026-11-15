@@ -1,0 +1,13 @@
+{
+  "namespace": "math",
+  "name": "fastmath",
+  "version": "2.0.0",
+  "variants": [
+    {
+      "id": "564e58f7d75618dc2786661c48ad8ffc19d362896f5a46c13aed356015be8a20",
+      "os": "windows",
+      "arch": "x86_64",
+      "digest": "557be0e115a859c6f53f1b2dc617262ca63c47f508be4b586f2d23dcda0d7d51"
+    }
+  ]
+}

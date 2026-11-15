@@ -5,4 +5,6 @@ edition = "2021"
 
 [dependencies]
 glue-model = { path = "../glue-model" }
+glue-packages = { path = "../glue-packages" }
+glue-toolchains = { path = "../glue-toolchains" }
 thiserror = "2.0"

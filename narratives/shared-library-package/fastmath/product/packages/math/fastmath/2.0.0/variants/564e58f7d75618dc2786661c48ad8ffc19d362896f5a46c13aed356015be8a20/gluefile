@@ -1,0 +1,6 @@
+namespace math;
+shared_lib.add(fastmath)
+    .prebuilt("lib/fastmath.lib")
+    .runtime("bin/fastmath.dll")
+    .include.public("include")
+

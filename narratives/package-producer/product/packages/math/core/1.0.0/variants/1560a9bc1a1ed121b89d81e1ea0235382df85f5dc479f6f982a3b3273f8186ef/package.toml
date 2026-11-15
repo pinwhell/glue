@@ -1,0 +1,18 @@
+targets = ["math::core"]
+
+[package]
+name = "core"
+version = "1.0.0"
+source_project = "package-producer"
+
+[variant]
+id = "1560a9bc1a1ed121b89d81e1ea0235382df85f5dc479f6f982a3b3273f8186ef"
+target_os = "windows"
+target_arch = "x86_64"
+toolchain = "msvc"
+toolchain_fingerprint = "dd7dd3590130973c4bd7ff0ffb1763475c4604809e5db6e086debe482e070291"
+target_name = "core"
+target_namespace = "math"
+target_kind = "static_lib"
+artifact = 'lib\core.lib'
+include_dirs = ["include"]

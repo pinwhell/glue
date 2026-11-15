@@ -1,6 +1,7 @@
 # Build artifacts
 /target/
 **/.glue/
+**/product/build/
 **/.ninja_deps
 **/.ninja_log
 *.obj
@@ -9,6 +10,16 @@
 *.a
 *.pdb
 *.exe
+*.exp
+*.ilk
+
+# Package products are deliberate distributable outputs and may be versioned.
+!**/product/packages/**/*.a
+!**/product/packages/**/*.lib
+!**/product/packages/**/*.so
+!**/product/packages/**/*.dylib
+!**/product/packages/**/*.dll
+!**/product/packages/**/*.exe
 
 # IDE & Editor
 .vscode/

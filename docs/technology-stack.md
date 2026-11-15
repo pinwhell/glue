@@ -790,6 +790,70 @@ Se evaluarán adaptadores para:
 
 No se presupone que cualquier paquete de esos ecosistemas pueda importarse sin transformación. La compatibilidad deberá validarse para cada modelo.
 
+## 12.3.1. Experiencia binaria primero, fallback desde fuente
+
+La experiencia principal de Glue será **reutilizar primero un binario precompilado compatible**. Si el paquete no ofrece una variante que satisfaga el target y las opciones solicitadas, Glue podrá compilar desde una revisión fijada si el paquete publica sus fuentes, declara una receta soportada y existe una toolchain capaz de producir ese target.
+
+Esta política reduce el tiempo y la fricción habituales de los builds nativos sin fingir que siempre existe un binario adecuado. Debe poder controlarse con políticas equivalentes a `prefer-binary` (predeterminada), `build-missing`, `source-only` y `binary-only`. La ausencia de una variante compatible puede activar el fallback; una descarga corrupta, una digest que no coincide o una firma inválida son errores de integridad y no se deben ocultar como si fueran un simple binario ausente.
+
+La identidad de una variante debe considerar, según corresponda, sistema operativo, arquitectura, ABI y formato de objeto; baseline de plataforma/libc/API; compilador y ABI C++; biblioteca estándar; runtime y su modalidad de enlace; configuración debug/release; opciones y dependencias transitivas. No se debe generar y publicar una variante para cada combinación imaginable: se debe describir el contrato de compatibilidad de las variantes disponibles y adoptar una regla conservadora para propiedades desconocidas.
+
+Glue debe diferenciar la semántica de enlace estático y dinámico. Un archivo `.lib` de Windows puede ser un archivo estático o una import library para una DLL. Una biblioteca estática evita desplegar esa biblioteca como archivo dinámico separado, pero no hace que sus objetos sean portables entre Windows y Linux ni garantiza compatibilidad de CRT, ABI C++, dependencias de enlace o runtime. Una biblioteca dinámica requiere además modelar el binario de runtime, las dependencias compartidas, la búsqueda en tiempo de ejecución y los requisitos de redistribución. El manifiesto debe exponer requisitos de compilación, enlace y ejecución por separado.
+
+Los paquetes source-buildable necesitan una receta explícita (o un adaptador de sistema de build soportado), herramientas de build y requisitos de target. Glue no debe prometer fallback para un paquete binario-only ni ejecutar recetas arbitrarias con semántica supuesta. Una toolchain de host no produce automáticamente una biblioteca para otro target: si falta compilador cruzado, SDK, sysroot o API requerida, el diagnóstico identifica el prerrequisito faltante.
+
+La resolución y el lockfile deben hacer visible si se seleccionó un artefacto publicado o uno compilado localmente, su digest/revisión, las opciones y la configuración efectiva que determinaron la variante. Los outputs source-built se cachean como artefactos de build identificados por fuentes, receta, dependencias de build, toolchain, flags, entorno relevante y target. Las selecciones de variantes pueden diferir por target sin forzar una resolución binaria universal para toda la máquina.
+
+La inspección de artefactos puede confirmar propiedades como formato, arquitectura, dependencias compartidas y baseline; no demuestra por sí sola compatibilidad de toda API C++ ni seguridad semántica. Glue combina inspección con metadatos declarados y reglas de plataforma, explica los límites de lo verificado y rechaza por defecto compatibilidad desconocida. El override del usuario debe ser explícito y visible.
+
+Este enfoque toma como referencias ideas ya usadas en otros sistemas: [Conan describe IDs de paquete a partir de settings, opciones y dependencias](https://docs.conan.io/2/reference/binary_model/dependencies.html), [CMake representa bibliotecas preexistentes como imported targets con propiedades de uso](https://cmake.org/cmake/help/latest/guide/importing-exporting/index.html), y [MSVC documenta requisitos concretos de runtime y combinaciones `/MD`/`/MT`](https://learn.microsoft.com/en-us/cpp/build/reference/md-mt-ld-use-run-time-library?view=msvc-170). Glue necesita un modelo propio porque debe resolver también las diferencias entre plataforma, ABI, build desde fuente y despliegue de runtime.
+
+## 12.3.2. Producción local de productos de paquete
+
+El paquete debe ser un resultado producido por Glue, no solo una carpeta de headers y archivos `.a` que un consumidor deba descubrir manualmente. Se propone el comando `glue package`, que toma targets exportados, recopila sus archivos de instalación, genera metadata de uso/compatibilidad, valida la variante y la publica localmente en `product/packages/`. El formato de transporte o la publicación remota se pueden añadir después sin cambiar el contrato del producto local.
+
+La estructura lógica separa el árbol de build del árbol de productos:
+
+```text
+product/
+├── build/<build-key>/...
+└── packages/<namespace>/<name>/<version>/
+    ├── gluefile
+    └── variants/<variant-id>/
+        ├── package.toml
+        ├── include/
+        ├── lib/
+        └── runtime/
+```
+
+El `gluefile` del paquete funciona como índice declarativo de identidad, targets exportados y variantes disponibles. Cada variante contiene un manifiesto versionado y un payload relocatable. Paths de includes, bibliotecas y runtime deben ser relativos al paquete; no se deben exportar rutas absolutas del workspace productor. `.glue/` permanece como estado/caché privado. `glue clean` debe poder limpiar intermediates sin borrar productos reusables.
+
+La identidad del producto separa tres valores:
+
+* **Coordenada:** namespace/nombre/versión y revisión inmutable de la fuente.
+* **Variant ID:** hash versionado de las entradas normalizadas que cambian la compatibilidad/build: receta y source revision, target y ABI, opciones, linkage, ABI/runtime, dependencias relevantes y toolchain cuando aplique.
+* **Content digest:** SHA-256 del manifiesto y payload canónicos, para verificar integridad y detectar cambios. No establece compatibilidad ni confianza por sí mismo.
+
+El digest se registra fuera del contenido que cubre, o con una regla canónica que excluya el campo de digest. El formato debe evitar autorreferencia, normalizar paths/metadata y no depender del orden o timestamp del archivo comprimido. Un digest del árbol lógico y un hash del archivo de transporte son cosas distintas.
+
+Cada ABI/target genera una variante independiente. Android usa nombres ABI específicos (por ejemplo, `arm64-v8a` y `x86_64`) con contratos de llamada/formato propios; [la documentación del NDK define el contenido de una ABI y la lista soportada](https://developer.android.com/ndk/guides/abis). El resolver puede agrupar variantes bajo una misma versión de paquete, pero no mezcla outputs entre ellas ni supone que una variante Linux ARM64 sirva para Android ARM64.
+
+El producto local debe consumirse mediante targets exportados, sin que el consumer especifique filenames ni busque directorios. El import resuelve primero el índice del paquete, después selecciona la variante compatible, verifica el digest y añade includes, inputs de link y runtime files al modelo del proyecto. Si no hay variante, el resolver puede llamar al source-build recipe para producirla y dejarla disponible en `product/packages/` para siguientes builds locales.
+
+La creación de productos debe ser explícita y atómica. Glue arma una carpeta de staging, verifica que cada archivo provenga de un output declarado y permanezca dentro del staging root, valida metadata y digest, y solo entonces compromete la nueva variante. Una build fallida nunca debe dejar un paquete a medio escribir que parezca importable. Una variante publicada no se sobrescribe silenciosamente: cambian fuente/receta/opciones de ABI, cambia la identidad; mismos inputs con distinto digest indican no determinismo y necesitan diagnóstico.
+
+Para mantener la configuración del paquete simple sin ejecutar la configuración de aplicación al importarlo, Glue puede ofrecer un routing declarativo de contexto:
+
+```glue
+when imported {
+    return package()
+}
+
+# project/package build declarations
+```
+
+El branch es una forma especial y estática del frontend. En contexto de consumo, `return package()` redirige a `product/packages/.../gluefile`, que describe el producto y sus targets exportados. Las declaraciones de proyecto posteriores no se evalúan semánticamente en ese contexto. Cuando falta el binario y Glue ejecuta el source recipe, usa un contexto `package-build` que no toma la rama `when imported`, evitando recursión. Las ramas inactivas no ejecutan comandos, resuelven dependencias ni generan efectos laterales; la sintaxis no convierte Glue en un lenguaje imperativo general.
+
 ## 12.4. Modelo propio de Glue
 
 Glue definirá sus propias identidades de paquetes, referencias de targets y contratos de compatibilidad.
@@ -1150,9 +1214,9 @@ Resultado: reconstrucciones correctas y eficientes.
 
 ## Fase 4. Gestión de paquetes
 
-Implementar identidad de paquetes, fuentes locales, adquisición Git, versiones, resolución transitiva y lockfile.
+Implementar identidad de paquetes, fuentes locales, adquisición Git, versiones, resolución transitiva y lockfile. Dar prioridad a variantes binarias precompiladas verificadas y permitir fallback desde una revisión de fuente fijada mediante recetas y toolchains compatibles. Modelar linkage estático/dinámico, compatibilidad ABI, dependencias de runtime, políticas de usuario e identidad de la variante seleccionada. Añadir `glue package`, staging atómico, manifiesto/índice relocatable en `product/packages/`, variant ID y digest verificable, e importación de productos locales desde otro proyecto Glue.
 
-Resultado: proyectos reproducibles con dependencias externas.
+Resultado: un proyecto produce un paquete consumible localmente por otro proyecto Glue; Glue reutiliza binaries compatibles con mínima configuración, construye desde fuente cuando falta una variante y el paquete/toolchain lo permiten, o explica por qué ninguna ruta es segura o viable.
 
 ## Fase 5. Toolchains
 

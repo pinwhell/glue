@@ -209,6 +209,7 @@ dependencies = [
  "glue-platform-android",
  "glue-resolver",
  "glue-toolchains",
+ "sha2",
 ]
 
 [[package]]
@@ -216,6 +217,8 @@ name = "glue-config"
 version = "0.1.0"
 dependencies = [
  "glue-model",
+ "glue-packages",
+ "glue-toolchains",
  "thiserror",
 ]
 
@@ -232,6 +235,7 @@ version = "0.1.0"
 dependencies = [
  "glue-model",
  "serde",
+ "sha2",
  "thiserror",
  "toml",
 ]

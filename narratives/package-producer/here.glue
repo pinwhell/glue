@@ -1,0 +1,9 @@
+when imported {
+    return package()
+}
+
+namespace math;
+
+static_lib.add(core)
+    .sources("src/math.c")
+    .include.public("include")

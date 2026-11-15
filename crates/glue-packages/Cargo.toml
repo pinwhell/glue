@@ -8,3 +8,4 @@ glue-model = { path = "../glue-model" }
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 thiserror = "2.0"
+sha2 = "0.10"

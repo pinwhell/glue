@@ -1,0 +1,19 @@
+targets = ["math::fastmath"]
+
+[package]
+name = "fastmath"
+version = "2.0.0"
+source_project = "fastmath"
+
+[variant]
+id = "564e58f7d75618dc2786661c48ad8ffc19d362896f5a46c13aed356015be8a20"
+target_os = "windows"
+target_arch = "x86_64"
+toolchain = "msvc"
+toolchain_fingerprint = "dd7dd3590130973c4bd7ff0ffb1763475c4604809e5db6e086debe482e070291"
+target_name = "fastmath"
+target_namespace = "math"
+target_kind = "shared_lib"
+artifact = 'lib\fastmath.lib'
+runtime_artifacts = ['bin\fastmath.dll']
+include_dirs = ["include"]
